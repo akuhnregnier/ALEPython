@@ -7,6 +7,8 @@ TODO:
     this up to the user, use matplotlib styles, etc...
 
 """
+from collections.abc import Iterable
+
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy
@@ -116,7 +118,7 @@ def _first_order_ale_quant(predictor, train_set, feature, quantiles):
         Feature quantiles.
 
     """
-    ALE = np.zeros(len(quantiles) - 1)  # Final ALE function
+    ALE = np.zeros(len(quantiles) - 1)  # Final ALE function.
 
     for i in range(1, len(quantiles)):
         subset = train_set[
@@ -124,20 +126,20 @@ def _first_order_ale_quant(predictor, train_set, feature, quantiles):
             & (train_set[feature] < quantiles[i])
         ]
 
-        # Without any observation, local effect on splitted area is null
+        # Without any observation, local effect on split area is null.
         if len(subset) != 0:
             z_low = subset.copy()
             z_up = subset.copy()
             # The main ALE idea that compute prediction difference between same data
-            # except feature's one
+            # except feature's one.
             z_low[feature] = quantiles[i - 1]
             z_up[feature] = quantiles[i]
             ALE[i - 1] += (predictor(z_up) - predictor(z_low)).sum() / subset.shape[0]
 
-    # The accumulated effect
+    # The accumulated effect.
     ALE = ALE.cumsum()
     # Now we have to center ALE function in order to obtain null expectation for ALE
-    # function
+    # function.
     ALE -= ALE.mean()
     return ALE
 
@@ -147,12 +149,12 @@ def _second_order_ale_quant(predictor, train_set, features, quantiles):
 
     """
     quantiles = np.asarray(quantiles)
-    ALE = np.zeros((quantiles.shape[1], quantiles.shape[1]))  # Final ALE function
+    ALE = np.zeros((quantiles.shape[1], quantiles.shape[1]))  # Final ALE function.
     print(quantiles)
 
     for i in range(1, len(quantiles[0])):
         for j in range(1, len(quantiles[1])):
-            # Select subset of training data that falls within subset
+            # Select subset of training data that falls within subset.
             subset = train_set[
                 (quantiles[0, i - 1] <= train_set[features[0]])
                 & (quantiles[0, i] > train_set[features[0]])
@@ -160,16 +162,16 @@ def _second_order_ale_quant(predictor, train_set, features, quantiles):
                 & (quantiles[1, j] > train_set[features[1]])
             ]
 
-            # Without any observation, local effect on splitted area is null
+            # Without any observation, local effect on split area is null.
             if len(subset) != 0:
                 z_low = [
                     subset.copy() for _ in range(2)
-                ]  # The lower bounds on accumulated grid
+                ]  # The lower bounds on accumulated grid.
                 z_up = [
                     subset.copy() for _ in range(2)
-                ]  # The upper bound on accumulated grid
+                ]  # The upper bound on accumulated grid.
                 # The main ALE idea that compute prediction difference between same
-                # data except feature's one
+                # data except feature's one.
                 z_low[0][features[0]] = quantiles[0, i - 1]
                 z_low[0][features[1]] = quantiles[1, j - 1]
                 z_low[1][features[0]] = quantiles[0, i]
@@ -187,7 +189,7 @@ def _second_order_ale_quant(predictor, train_set, features, quantiles):
 
     ALE = np.cumsum(ALE, axis=0)  # The accumulated effect
     # Now we have to center ALE function in order to obtain null expectation for ALE
-    # function
+    # function.
     ALE -= ALE.mean()
     return ALE
 
@@ -213,24 +215,25 @@ def _first_order_ale_cat(
 
     """
     num_cat = len(features_classes)
-    ALE = np.zeros(num_cat)  # Final ALE function
+    ALE = np.zeros(num_cat)  # Final ALE function.
 
     for i in range(num_cat):
         subset = train_set[train_set[feature] == features_classes[i]]
 
-        # Without any observation, local effect on splitted area is null
+        # Without any observation, local effect on split area is null.
         if len(subset) != 0:
             z_low = subset.copy()
             z_up = subset.copy()
-            # The main ALE idea that compute prediction difference between same data except feature's one
+            # The main ALE idea that compute prediction difference between same data
+            # except feature's one.
             z_low[feature] = quantiles[i - 1]
             z_up[feature] = quantiles[i]
             ALE[i] += (predictor(z_up) - predictor(z_low)).sum() / subset.shape[0]
 
-    # The accumulated effect
+    # The accumulated effect.
     ALE = ALE.cumsum()
     # Now we have to center ALE function in order to obtain null expectation for ALE
-    # function
+    # function.
     ALE -= ALE.mean()
     return ALE
 
@@ -254,8 +257,8 @@ def ale_plot(
         must be supplied which will be used instead of `model.predict`.
     train_set : pandas.core.frame.DataFrame
         Training set on which model was trained.
-    features : str or tuple of str
-        One or two features for which to plot ALE plot.
+    features : [2-iterable of] column label
+        One or two features for which to plot the ALE plot.
     bins : int, optional
         Number of bins used to split feature's space.
     monte_carlo : boolean, optional
@@ -275,6 +278,8 @@ def ale_plot(
     ------
     ValueError
         If both `model` and `predictor` are None.
+    ValueError
+        If `features` contains something other than 1 or 2 features.
 
     """
     if model is None and predictor is None:
@@ -285,13 +290,18 @@ def ale_plot(
 
     fig, ax = plt.subplots()
 
-    if not isinstance(features, (list, tuple, np.ndarray)):
+    if isinstance(features, Iterable) and not isinstance(features, str):
+        # If `features` is a non-string iterable.
+        features = np.asarray(features)
+    else:
+        # If `features` is not an iterable, or it is a string, then assume it
+        # represents one column label.
         features = np.asarray([features])
 
     if len(features) == 1:
         quantiles = np.percentile(
             train_set[features[0]], [1.0 / bins * i * 100 for i in range(0, bins + 1)]
-        )  # Split areas of feature
+        )  # Split areas of feature.
 
         if monte_carlo:
             mc_rep = kwargs.get("monte_carlo_rep", 50)
@@ -368,5 +378,9 @@ def ale_plot(
                 ),
                 "Bins : {0}x{1}".format(len(quantiles[0]) - 1, len(quantiles[1]) - 1),
             )
+    else:
+        raise ValueError(
+            f"'features' had '{len(features)}' entries, but only up to 2 are supported."
+        )
 
     plt.show()
