@@ -1,5 +1,7 @@
 
 [![Build Status](https://travis-ci.org/MaximeJumelle/ALEPython.svg?branch=dev)](https://travis-ci.org/MaximeJumelle/ALEPython)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/ambv/black)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 Python Accumulated Local Effects package.
 
@@ -19,7 +21,7 @@ ALEPython is supported on Python 3.4, 3.5 and 3.6. You can either install packag
 pip install alepython
 ```
 
-Or directly from sources 
+Or directly from sources
 
 ```
 git clone https://github.com/MaximeJumelle/ALEPython.git
