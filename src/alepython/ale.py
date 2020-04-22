@@ -14,6 +14,47 @@ from loguru import logger
 from matplotlib.patches import Rectangle
 from scipy.spatial import cKDTree
 
+logger.disable("alepython")
+
+
+def _check_two_ints(values):
+    """Retrieve two integers.
+
+    Parameters
+    ----------
+    values : [2-iterable of] int
+        Values to process.
+
+    Returns
+    -------
+    values : 2-tuple of int
+        The processed integers.
+
+    Raises
+    ------
+    ValueError
+        If more than 2 values are given.
+    ValueError
+        If the values are not integers.
+
+    """
+    if isinstance(values, (int, np.integer)):
+        values = (values, values)
+    elif len(values) == 1:
+        values = (values[0], values[0])
+    elif len(values) != 2:
+        raise ValueError(
+            "'{}' values were given. Expected at most 2.".format(len(values))
+        )
+
+    if not all(isinstance(n_bin, (int, np.integer)) for n_bin in values):
+        raise ValueError(
+            "All values must be an integer. Got types '{}' instead.".format(
+                {type(n_bin) for n_bin in values}
+            )
+        )
+    return values
+
 
 def _get_centres(x):
     """Return bin centres from bin edges.
@@ -26,8 +67,8 @@ def _get_centres(x):
     Returns
     -------
     centres : array-like
-        The centres of `x`, the shape of which is (N-1, ...) for `x` with shape (N,
-        ...).
+        The centres of `x`, the shape of which is (N - 1, ...) for
+        `x` with shape (N, ...).
 
     Examples
     --------
@@ -56,29 +97,31 @@ def _ax_title(ax, title, subtitle=""):
     ax.set_title("\n".join((title, subtitle)))
 
 
-def _ax_labels(ax, xlabel, ylabel):
+def _ax_labels(ax, xlabel=None, ylabel=None):
     """Add labels to axis.
 
     Parameters
     ----------
     ax : matplotlib.axes.Axes
         Axes object to add labels to.
-    xlabel : str
+    xlabel : str, optional
         X axis label.
-    ylabel : str
+    ylabel : str, optional
         Y axis label.
 
     """
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
+    if xlabel is not None:
+        ax.set_xlabel(xlabel)
+    if ylabel is not None:
+        ax.set_ylabel(ylabel)
 
 
 def _ax_quantiles(ax, quantiles, twin="x"):
-    """Plot quantiles of a feature over opposite axis.
+    """Plot quantiles of a feature onto axis.
 
     Parameters
     ----------
-    ax : matplotlib.Axis
+    ax : matplotlib.axes.Axes
         Axis to modify.
     quantiles : array-like
         Quantiles to plot.
@@ -125,25 +168,71 @@ def _ax_quantiles(ax, quantiles, twin="x"):
     )
 
 
-def _first_order_quant_plot(ax, quantiles, ALE, **kwargs):
-    ax.plot(_get_centres(quantiles), ALE, **kwargs)
+def _first_order_quant_plot(ax, quantiles, ale, **kwargs):
+    """First order ALE plot.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axis to plot onto.
+    quantiles : array-like
+        ALE quantiles.
+    ale : array-like
+        ALE to plot.
+    **kwargs : plot properties, optional
+        Additional keyword parameters are passed to `ax.plot`.
+
+    """
+    ax.plot(_get_centres(quantiles), ale, **kwargs)
 
 
-def _second_order_quant_plot(fig, ax, quantiles_list, ALE, mark_empty=True, **kwargs):
+def _second_order_quant_plot(
+    fig, ax, quantiles_list, ale, mark_empty=True, n_interp=50, **kwargs
+):
+    """Second order ALE plot.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axis to plot onto.
+    quantiles_list : array-like
+        ALE quantiles for the first (`quantiles_list[0]`) and second
+        (`quantiles_list[1]`) features.
+    ale : masked array
+        ALE to plot. Where `ale.mask` is True, this denotes bins where no samples were
+        available. See `mark_empty`.
+    mark_empty : bool, optional
+        If True, plot rectangles over bins that did not contain any samples.
+    n_interp : [2-iterable of] int, optional
+        The number of interpolated samples generated from `ale` prior to contour
+        plotting. Two integers may be given to specify different interpolation steps
+        for the two features.
+    **kwargs : contourf properties, optional
+        Additional keyword parameters are passed to `ax.contourf`.
+
+    Raises
+    ------
+    ValueError
+        If `n_interp` values were not integers.
+    ValueError
+        If more than 2 values were given for `n_interp`.
+
+    """
     centres_list = [_get_centres(quantiles) for quantiles in quantiles_list]
-    x = np.linspace(centres_list[0][0], centres_list[0][-1], 50)
-    y = np.linspace(centres_list[1][0], centres_list[1][-1], 50)
+    n_x, n_y = _check_two_ints(n_interp)
+    x = np.linspace(centres_list[0][0], centres_list[0][-1], n_x)
+    y = np.linspace(centres_list[1][0], centres_list[1][-1], n_y)
 
     X, Y = np.meshgrid(x, y, indexing="xy")
-    ALE_interp = scipy.interpolate.interp2d(centres_list[0], centres_list[1], ALE.T)
-    CF = ax.contourf(X, Y, ALE_interp(x, y), cmap="bwr", levels=30, alpha=0.7)
+    ale_interp = scipy.interpolate.interp2d(centres_list[0], centres_list[1], ale.T)
+    CF = ax.contourf(X, Y, ale_interp(x, y), cmap="bwr", levels=30, alpha=0.7, **kwargs)
 
-    if mark_empty and np.any(ALE.mask):
-        # Turn off autoscale so that boxes at the edges (contourf only plots the bin
+    if mark_empty and np.any(ale.mask):
+        # Do not autoscale, so that boxes at the edges (contourf only plots the bin
         # centres, not their edges) don't enlarge the plot.
         plt.autoscale(False)
         # Add rectangles to indicate cells without samples.
-        for i, j in zip(*np.where(ALE.mask)):
+        for i, j in zip(*np.where(ale.mask)):
             ax.add_patch(
                 Rectangle(
                     [quantiles_list[0][i], quantiles_list[1][j]],
@@ -159,9 +248,41 @@ def _second_order_quant_plot(fig, ax, quantiles_list, ALE, mark_empty=True, **kw
 
 
 def _get_quantiles(train_set, feature, bins):
-    # When defining the quantiles this way while using the half open interval
-    # (lower quantile, upper quantile], care has to taken that the lowest-valued
-    # observation is indeed included in the first bin. This is handled by `np.digitize`.
+    """Get quantiles from a feature in a dataset.
+
+    Parameters
+    ----------
+    train_set : pandas.core.frame.DataFrame
+        Dataset containing feature `feature`.
+    feature : column label
+        Feature for which to calculate quantiles.
+    bins : int
+        The number of quantiles is calculated as `bins + 1`.
+
+    Returns
+    -------
+    quantiles : array-like
+        Quantiles.
+    bins : int
+        Number of bins, `len(quantiles) - 1`. This may be lower than the original
+        `bins` if identical quantiles were present.
+
+    Raises
+    ------
+    ValueError
+        If `bins` is not an integer.
+
+    Notes
+    -----
+    When using this definition of quantiles in combination with a half open interval
+    (lower quantile, upper quantile], care has to taken that the smallest observation
+    is included in the first bin. This is handled transparently by `np.digitize`.
+
+    """
+    if not isinstance(bins, (int, np.integer)):
+        raise ValueError(
+            "Expected integer 'bins', but got type '{}'.".format(type(bins))
+        )
     quantiles = np.unique(
         np.quantile(
             train_set[feature], np.linspace(0, 1, bins + 1), interpolation="lower"
@@ -189,7 +310,7 @@ def _first_order_ale_quant(predictor, train_set, feature, bins):
 
     Returns
     -------
-    main_effect : array-like
+    ale : array-like
         The first order ALE.
     quantiles : array-like
         The quantiles used.
@@ -252,11 +373,11 @@ def _second_order_ale_quant(predictor, train_set, features, bins):
 
     Returns
     -------
-    main_effect : (M, N) masked array
+    ale : (M, N) masked array
         The second order ALE. Elements are masked where no data was available.
     quantiles : 2-tuple of array-like
-        The quantiles used: first the quantiles for `features[0]`, then for
-        `features[1]`.
+        The quantiles used: first the quantiles for `features[0]` with shape (M + 1,),
+        then for `features[1]` with shape (N + 1,).
 
     Raises
     ------
@@ -274,24 +395,12 @@ def _second_order_ale_quant(predictor, train_set, features, bins):
                 n_feat=len(features)
             )
         )
-    if isinstance(bins, (int, np.integer)):
-        bins = (bins, bins)
-    elif len(bins) == 1:
-        bins = (bins[0], bins[0])
-    elif len(bins) != 2:
-        raise ValueError("'{}' bins were given. Expected at most 2.".format(len(bins)))
-    if not all(isinstance(n_bin, (int, np.integer)) for n_bin in bins):
-        raise ValueError(
-            "All bins must be an integer. Got types '{}' instead.".format(
-                {type(n_bin) for n_bin in bins}
-            )
-        )
 
     quantiles_list, bins_list = tuple(
         zip(
             *(
                 _get_quantiles(train_set, feature, n_bin)
-                for feature, n_bin in zip(features, bins)
+                for feature, n_bin in zip(features, _check_two_ints(bins))
             )
         )
     )
@@ -462,7 +571,7 @@ def _first_order_ale_cat(
 
     """
     num_cat = len(features_classes)
-    ALE = np.zeros(num_cat)  # Final ALE function.
+    ale = np.zeros(num_cat)  # Final ALE function.
 
     for i in range(num_cat):
         subset = train_set[train_set[feature] == features_classes[i]]
@@ -475,14 +584,14 @@ def _first_order_ale_cat(
             # except feature's one.
             z_low[feature] = quantiles[i - 1]
             z_up[feature] = quantiles[i]
-            ALE[i] += (predictor(z_up) - predictor(z_low)).sum() / subset.shape[0]
+            ale[i] += (predictor(z_up) - predictor(z_low)).sum() / subset.shape[0]
 
     # The accumulated effect.
-    ALE = ALE.cumsum()
+    ale = ale.cumsum()
     # Now we have to center ALE function in order to obtain null expectation for ALE
     # function.
-    ALE -= ALE.mean()
-    return ALE
+    ale -= ale.mean()
+    return ale
 
 
 def ale_plot(
@@ -495,6 +604,7 @@ def ale_plot(
     features_classes=None,
     monte_carlo_rep=50,
     monte_carlo_ratio=0.1,
+    rugplot_lim=1000,
 ):
     """Plots ALE function of specified features based on training set.
 
@@ -517,12 +627,15 @@ def ale_plot(
         Custom prediction function. See `model`.
     features_classes : iterable of str, optional
         If features is first-order and a categorical variable, plot ALE according to
-        discrete aspect of data. Note: not implemented yet.
+        discrete aspect of data.
     monte_carlo_rep : int
         Number of Monte-Carlo replicas.
     monte_carlo_ratio : float
         Proportion of randomly selected samples from dataset for each Monte-Carlo
         replica.
+    rugplot_lim : int, optional
+        If `train_set` has more rows than `rugplot_lim`, no rug plot will be plotted.
+        Set to None to always plot rug plots. Set to 0 to always plot rug plots.
 
     Raises
     ------
@@ -532,6 +645,8 @@ def ale_plot(
         If `len(features)` not in {1, 2}.
     ValueError
         If multiple bins were given for 1 feature.
+    NotImplementedError
+        If `features_classes` is not None.
 
     """
     if model is None and predictor is None:
@@ -574,17 +689,17 @@ def ale_plot(
                         # The same quantiles cannot be reused here as this could cause
                         # some bins to be empty or contain disproportionate numbers of
                         # samples.
-                        mc_ALE, mc_quantiles = _first_order_ale_quant(
+                        mc_ale, mc_quantiles = _first_order_ale_quant(
                             model.predict if predictor is None else predictor,
                             train_set_rep,
                             features[0],
                             bins,
                         )
                         _first_order_quant_plot(
-                            ax, mc_quantiles, mc_ALE, color="#1f77b4", alpha=0.06
+                            ax, mc_quantiles, mc_ale, color="#1f77b4", alpha=0.06
                         )
 
-            ALE, quantiles = _first_order_ale_quant(
+            ale, quantiles = _first_order_ale_quant(
                 model.predict if predictor is None else predictor,
                 train_set,
                 features[0],
@@ -600,20 +715,21 @@ def ale_plot(
                 ),
             )
             ax.grid(True, linestyle="-", alpha=0.4)
-            sns.rugplot(train_set[features[0]], ax=ax, alpha=0.2)
-            _first_order_quant_plot(ax, quantiles, ALE, color="black")
+            if rugplot_lim is None or train_set.shape[0] <= rugplot_lim:
+                sns.rugplot(train_set[features[0]], ax=ax, alpha=0.2)
+            _first_order_quant_plot(ax, quantiles, ale, color="black")
             _ax_quantiles(ax, quantiles)
 
     elif len(features) == 2:
         if features_classes is None:
             # Continuous data.
-            ALE, quantiles_list = _second_order_ale_quant(
+            ale, quantiles_list = _second_order_ale_quant(
                 model.predict if predictor is None else predictor,
                 train_set,
                 features,
                 bins,
             )
-            _second_order_quant_plot(fig, ax, quantiles_list, ALE)
+            _second_order_quant_plot(fig, ax, quantiles_list, ale)
             _ax_labels(
                 ax,
                 "Feature '{}'".format(features[0]),
@@ -634,5 +750,4 @@ def ale_plot(
                 n_feat=len(features)
             )
         )
-
     plt.show()

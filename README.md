@@ -9,18 +9,19 @@ Python Accumulated Local Effects package.
 Explaining model predictions is very common when you have to deploy a Machine Learning algorithm on a large scale.
 There are many methods that help us understand our model; one these uses Partial Dependency Plots (PDP), which have been widely used for years.
 
-However, they suffer from requiring a stringent assumption: **features have to be uncorrelated**.
+However, they suffer from a stringent assumption: **features have to be uncorrelated**.
 In real world scenarios, features are often correlated, whether because some are directly computed from others, or because observed phenomena produce correlated distributions.
 
 Accumulated Local Effects (or ALE) plots first proposed by [_Apley and Zhu_ (2016)](#1) alleviate this issue reasonably by using actual conditional marginal distributions instead of considering each marginal distribution of features.
 This is more reliable when handling (even strongly) correlated variables.
 
 This package aims to provide useful and quick access to ALE plots, so that you can easily explain your model through predictions.
+
 For further details about model interpretability and ALE plots, see eg. [_Molnar_ (2020)](#2).
 
 # Install
 
-ALEPython is supported on Python >= 3.4.
+ALEPython is supported on Python >= 3.5.
 You can either install package via `pip`:
 
 ```sh
@@ -40,6 +41,7 @@ pip install -e ALEPython
 # Usage
 
 ```python
+from alepython import ale_plot
 # Plots ALE of feature 'cont' with Monte-Carlo replicas (default : 50).
 ale_plot(model, X_train, 'cont', monte_carlo=True)
 ```
@@ -68,6 +70,9 @@ ale_plot(model, X_train, 'cont', monte_carlo=True)
 - Second-order ALE plots of categorical features
 - Documentation and API reference
 - Jupyter Notebook examples
+- Upload to PyPi
+- Upload to conda-forge
+- Use of matplotlib styles or kwargs to allow overriding plotting appearance
 
 If you are interested in the project, I would be happy to collaborate with you since there are still quite a lot of improvements needed.
 
