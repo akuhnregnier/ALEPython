@@ -117,12 +117,12 @@ def test_argument_handling():
     with pytest.raises(ValueError, match=r".*'model'.*'predictor'.*"):
         ale_plot(model=None, train_set=pd.DataFrame([1]), features=[0])
 
-    with pytest.raises(ValueError, match=r"'features' had '3'.*"):
+    with pytest.raises(ValueError, match=r"'3' 'features'.*"):
         ale_plot(
             model=SimpleModel(), train_set=pd.DataFrame([1]), features=list(range(3))
         )
 
-    with pytest.raises(ValueError, match=r"'features' had '0'.*"):
+    with pytest.raises(ValueError, match=r"'0' 'features'.*"):
         ale_plot(model=SimpleModel(), train_set=pd.DataFrame([1]), features=[])
 
     with pytest.raises(
