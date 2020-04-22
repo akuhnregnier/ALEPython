@@ -17,6 +17,34 @@ from scipy.spatial import cKDTree
 logger.disable("alepython")
 
 
+def _parse_features(features):
+    """Standardise representation of column labels.
+
+    Args:
+        features : object
+            One or more column labels.
+
+    Returns:
+        features : array-like
+            An array of input features.
+
+    Examples
+    --------
+    >>> _parse_features(1)
+    array([1])
+    >>> _parse_features(('a', 'b'))
+    array(['a', 'b'], dtype='<U1')
+
+    """
+    if isinstance(features, Iterable) and not isinstance(features, str):
+        # If `features` is a non-string iterable.
+        return np.asarray(features)
+    else:
+        # If `features` is not an iterable, or it is a string, then assume it
+        # represents one column label.
+        return np.asarray([features])
+
+
 def _check_two_ints(values):
     """Retrieve two integers.
 
@@ -36,6 +64,15 @@ def _check_two_ints(values):
         If more than 2 values are given.
     ValueError
         If the values are not integers.
+
+    Examples
+    --------
+    >>> _check_two_ints(1)
+    (1, 1)
+    >>> _check_two_ints((1, 2))
+    (1, 2)
+    >>> _check_two_ints((1,))
+    (1, 1)
 
     """
     if isinstance(values, (int, np.integer)):
@@ -389,6 +426,7 @@ def _second_order_ale_quant(predictor, train_set, features, bins):
         If bins are not integers.
 
     """
+    features = _parse_features(features)
     if len(features) != 2:
         raise ValueError(
             "'features' contained '{n_feat}' features. Expected 2.".format(
@@ -657,13 +695,7 @@ def ale_plot(
 
     fig, ax = plt.subplots()
 
-    if isinstance(features, Iterable) and not isinstance(features, str):
-        # If `features` is a non-string iterable.
-        features = np.asarray(features)
-    else:
-        # If `features` is not an iterable, or it is a string, then assume it
-        # represents one column label.
-        features = np.asarray([features])
+    features = _parse_features(features)
 
     if len(features) == 1:
         if not isinstance(bins, (int, np.integer)):

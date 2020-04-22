@@ -8,25 +8,8 @@ import pandas as pd
 import pytest
 
 from alepython import ale_plot
-from alepython.ale import _ax_quantiles
 
-
-class SimpleModel:
-    """A simple predictive model for testing purposes.
-
-    Methods
-    -------
-    predict(X)
-        Given input data `X`, predict response variable.
-
-    """
-
-    def predict(self, X):
-        return np.mean(X, axis=1)
-
-
-def simple_predictor(X):
-    return np.mean(X, axis=1)
+from .utils import SimpleModel, simple_predictor
 
 
 @contextmanager
@@ -110,38 +93,3 @@ def test_df_column_features():
         ale_plot(SimpleModel(), train_set, train_set.columns[:1])
     # Clean up the created figure.
     plt.close()
-
-
-def test_argument_handling():
-    """Test that proper errors are raised."""
-    with pytest.raises(ValueError, match=r".*'model'.*'predictor'.*"):
-        ale_plot(model=None, train_set=pd.DataFrame([1]), features=[0])
-
-    with pytest.raises(ValueError, match=r"'3' 'features'.*"):
-        ale_plot(
-            model=SimpleModel(), train_set=pd.DataFrame([1]), features=list(range(3))
-        )
-
-    with pytest.raises(ValueError, match=r"'0' 'features'.*"):
-        ale_plot(model=SimpleModel(), train_set=pd.DataFrame([1]), features=[])
-
-    with pytest.raises(
-        NotImplementedError, match="'features_classes' is not implemented yet."
-    ):
-        ale_plot(
-            model=SimpleModel(),
-            train_set=pd.DataFrame([1]),
-            features=[0],
-            features_classes=["a"],
-        )
-
-
-def test_ax_quantiles():
-    fig, ax = plt.subplots()
-    with pytest.raises(ValueError, match="'twin' should be one of 'x' or 'y'."):
-        _ax_quantiles(ax, list(range(2)), "z")
-    plt.close(fig)
-
-    fig, ax = plt.subplots()
-    _ax_quantiles(ax, list(range(2)), "x")
-    plt.close(fig)

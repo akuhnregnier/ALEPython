@@ -5,25 +5,7 @@ import pandas as pd
 
 from alepython.ale import _first_order_ale_quant, _get_centres, _second_order_ale_quant
 
-
-def linear_predictor(X):
-    """A simple linear effect with features 'a' and 'b'."""
-    return X["a"] + X["b"]
-
-
-def interaction_predictor(X):
-    """Interaction changes sign at b = 0.5."""
-    a = X["a"]
-    b = X["b"]
-
-    out = np.empty_like(a)
-
-    mask = b <= 0.5
-    out[mask] = a[mask] * b[mask]
-    mask = ~mask
-    out[mask] = -a[mask] * b[mask]
-
-    return out
+from .utils import interaction_predictor, linear_predictor
 
 
 def test_linear():

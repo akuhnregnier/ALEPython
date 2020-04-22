@@ -32,11 +32,15 @@ directly from source (including requirements):
 pip install https://github.com/MaximeJumelle/ALEPython/archive/dev.zip
 ```
 or after cloning (or forking) for development purposes:
-
 ```sh
 git clone https://github.com/MaximeJumelle/ALEPython.git
 pip install -e ALEPython
 ```
+To install test (using `pytest`) dependencies for the last case, run
+```sh
+pip install ".[test]"
+```
+in the root directory of the repository.
 
 # Usage
 
