@@ -1,13 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ALE plotting.
-
-TODO:
-    Clarify some docstrings.
-    Do not set defaults for matplotlib colors, linestyles, etc... in the code - leave
-    this up to the user, use matplotlib styles, etc...
-    Fix logic.
-
-"""
+"""ALE plotting for continuous or categorical features."""
 from collections.abc import Iterable
 from functools import reduce
 from itertools import product
@@ -24,6 +16,27 @@ from scipy.spatial import cKDTree
 
 
 def _get_centres(x):
+    """Return bin centres from bin edges.
+
+    Parameters
+    ----------
+    x : array-like
+        The first axis of `x` will be averaged.
+
+    Returns
+    -------
+    centres : array-like
+        The centres of `x`, the shape of which is (N-1, ...) for `x` with shape (N,
+        ...).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> x = np.array([0, 1, 2, 3])
+    >>> _get_centres(x)
+    array([0.5, 1.5, 2.5])
+
+    """
     return (x[1:] + x[:-1]) / 2
 
 
