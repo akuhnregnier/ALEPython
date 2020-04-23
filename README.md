@@ -1,6 +1,8 @@
-[![Build Status](https://travis-ci.org/MaximeJumelle/ALEPython.svg?branch=dev)](https://travis-ci.org/MaximeJumelle/ALEPython)
+[![Build Status](https://travis-ci.com/akuhnregnier/ALEPython.svg?branch=working)](https://travis-ci.com/akuhnregnier/ALEPython)
+[![codecov](https://codecov.io/gh/akuhnregnier/ALEPython/branch/working/graph/badge.svg)](https://codecov.io/gh/akuhnregnier/ALEPython)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/ambv/black)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/akuhnregnier/ALEPython/blob/working/LICENSE)
+
 
 Python Accumulated Local Effects package.
 
