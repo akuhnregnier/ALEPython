@@ -24,12 +24,14 @@ For further details about model interpretability and ALE plots, see eg. [_Molnar
 # Install
 
 ALEPython is supported on Python >= 3.5.
-You can either install package via `pip`:
 
+<!---
+You can either install ALEPython via `pip`:
 ```sh
 pip install alepython
 ```
-directly from source (including requirements):
+-->
+You can either install ALEPython directly from source (including requirements):
 ```sh
 pip install git+https://github.com/akuhnregnier/ALEPython.git@working#egg=alepython
 ```
