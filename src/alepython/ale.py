@@ -13,6 +13,7 @@ import seaborn as sns
 from loguru import logger
 from matplotlib.patches import Rectangle
 from scipy.spatial import cKDTree
+from tqdm import tqdm
 
 logger.disable("alepython")
 
@@ -648,6 +649,7 @@ def ale_plot(
     monte_carlo_rep=50,
     monte_carlo_ratio=0.1,
     rugplot_lim=1000,
+    verbose=False,
 ):
     """Plots ALE function of specified features based on training set.
 
@@ -679,6 +681,8 @@ def ale_plot(
     rugplot_lim : int, optional
         If `train_set` has more rows than `rugplot_lim`, no rug plot will be plotted.
         Set to None to always plot rug plots. Set to 0 to always plot rug plots.
+    verbose: bool, optional
+        If True, output additional information, such as Monte Carlo progress updates.
 
     Raises
     ------
@@ -698,9 +702,11 @@ def ale_plot(
     if features_classes is not None:
         raise NotImplementedError("'features_classes' is not implemented yet.")
 
-    fig, ax = plt.subplots()
-
     features = _parse_features(features)
+    ax_labels = ["Feature '{}'".format(feature) for feature in features]
+    predictor = model.predict if predictor is None else predictor
+
+    fig, ax = plt.subplots()
 
     if len(features) == 1:
         if not isinstance(bins, (int, np.integer)):
@@ -708,47 +714,37 @@ def ale_plot(
 
         if features_classes is None:
             # Continuous data.
-
             if monte_carlo:
-                mc_replicates = np.asarray(
-                    [
-                        [
-                            np.random.choice(range(train_set.shape[0]))
-                            for _ in range(int(monte_carlo_ratio * train_set.shape[0]))
-                        ]
-                        for _ in range(monte_carlo_rep)
+                for _ in tqdm(
+                    range(monte_carlo_rep),
+                    desc="Calculating MC replicas",
+                    disable=not verbose,
+                ):
+                    train_set_rep = train_set.iloc[
+                        np.random.randint(
+                            train_set.shape[0],
+                            size=int(monte_carlo_ratio * train_set.shape[0]),
+                        )
                     ]
-                )
-                for k, rep in enumerate(mc_replicates):
-                    train_set_rep = train_set.iloc[rep, :]
-                    # Make this recursive?
-                    if features_classes is None:
-                        # The same quantiles cannot be reused here as this could cause
-                        # some bins to be empty or contain disproportionate numbers of
-                        # samples.
-                        mc_ale, mc_quantiles = _first_order_ale_quant(
-                            model.predict if predictor is None else predictor,
-                            train_set_rep,
-                            features[0],
-                            bins,
-                        )
-                        _first_order_quant_plot(
-                            ax, mc_quantiles, mc_ale, color="#1f77b4", alpha=0.06
-                        )
+                    # The same quantiles cannot be reused here as this could cause
+                    # some bins to be empty or contain disproportionate numbers of
+                    # samples.
+                    mc_ale, mc_quantiles = _first_order_ale_quant(
+                        predictor, train_set_rep, features[0], bins
+                    )
+                    _first_order_quant_plot(
+                        ax, mc_quantiles, mc_ale, color="#1f77b4", alpha=0.06
+                    )
 
             ale, quantiles = _first_order_ale_quant(
-                model.predict if predictor is None else predictor,
-                train_set,
-                features[0],
-                bins,
+                predictor, train_set, features[0], bins
             )
-            _ax_labels(ax, "Feature '{}'".format(features[0]), "")
+            _ax_labels(ax, *ax_labels)
             _ax_title(
                 ax,
                 "First-order ALE of feature '{0}'".format(features[0]),
                 "Bins : {0} - Monte-Carlo : {1}".format(
-                    len(quantiles) - 1,
-                    mc_replicates.shape[0] if monte_carlo else "False",
+                    len(quantiles) - 1, monte_carlo_rep if monte_carlo else "False"
                 ),
             )
             ax.grid(True, linestyle="-", alpha=0.4)
@@ -761,17 +757,10 @@ def ale_plot(
         if features_classes is None:
             # Continuous data.
             ale, quantiles_list = _second_order_ale_quant(
-                model.predict if predictor is None else predictor,
-                train_set,
-                features,
-                bins,
+                predictor, train_set, features, bins
             )
             _second_order_quant_plot(fig, ax, quantiles_list, ale)
-            _ax_labels(
-                ax,
-                "Feature '{}'".format(features[0]),
-                "Feature '{}'".format(features[1]),
-            )
+            _ax_labels(ax, *ax_labels)
             for twin, quantiles in zip(("x", "y"), quantiles_list):
                 _ax_quantiles(ax, quantiles, twin=twin)
             _ax_title(
@@ -787,4 +776,3 @@ def ale_plot(
                 n_feat=len(features)
             )
         )
-    plt.show()
