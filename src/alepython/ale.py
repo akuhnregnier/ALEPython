@@ -23,13 +23,15 @@ __all__ = ("ale_plot",)
 def _parse_features(features):
     """Standardise representation of column labels.
 
-    Args:
-        features : object
-            One or more column labels.
+    Parameters
+    ----------
+    features : object
+        One or more column labels.
 
-    Returns:
-        features : array-like
-            An array of input features.
+    Returns
+    -------
+    features : array-like
+        An array of input features.
 
     Examples
     --------
