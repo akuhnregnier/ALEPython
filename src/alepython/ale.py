@@ -398,7 +398,9 @@ def _first_order_ale_quant(predictor, train_set, feature, bins):
     return ale, quantiles
 
 
-def _second_order_ale_quant(predictor, train_set, features, bins):
+def _second_order_ale_quant(
+    predictor, train_set, features, bins, return_samples_grid=False
+):
     """Estimate the second-order ALE function for two continuous feature data.
 
     Parameters
@@ -413,6 +415,8 @@ def _second_order_ale_quant(predictor, train_set, features, bins):
         This defines the number of bins to compute. The effective number of bins may
         be less than this as only unique quantile values of train_set[feature] are
         used. If one integer is given, this is used for both features.
+    return_samples_grid : bool, optional
+        Return the number of samples in each quantile bin.
 
     Returns
     -------
@@ -421,6 +425,9 @@ def _second_order_ale_quant(predictor, train_set, features, bins):
     quantiles : 2-tuple of array-like
         The quantiles used: first the quantiles for `features[0]` with shape (M + 1,),
         then for `features[1]` with shape (N + 1,).
+    samples_grid : (M, N) ndarray
+        Present only if `return_samples_grid=True`. The number of samples in each
+        quantile bin.
 
     Raises
     ------
@@ -591,6 +598,8 @@ def _second_order_ale_quant(predictor, train_set, features, bins):
 
     # Mark the originally missing points as such to enable later interpretation.
     ale.mask = missing_bin_mask
+    if return_samples_grid:
+        return ale, quantiles_list, samples_grid
     return ale, quantiles_list
 
 
@@ -650,6 +659,7 @@ def ale_plot(
     monte_carlo_ratio=0.1,
     rugplot_lim=1000,
     verbose=False,
+    plot_quantiles=True,
 ):
     """Plots ALE function of specified features based on training set.
 
@@ -681,8 +691,10 @@ def ale_plot(
     rugplot_lim : int, optional
         If `train_set` has more rows than `rugplot_lim`, no rug plot will be plotted.
         Set to None to always plot rug plots. Set to 0 to always plot rug plots.
-    verbose: bool, optional
+    verbose : bool, optional
         If True, output additional information, such as Monte Carlo progress updates.
+    plot_quantiles : bool, optional
+        Add an axis to the figure that shows the feature quantiles.
 
     Raises
     ------
@@ -751,7 +763,8 @@ def ale_plot(
             if rugplot_lim is None or train_set.shape[0] <= rugplot_lim:
                 sns.rugplot(train_set[features[0]], ax=ax, alpha=0.2)
             _first_order_quant_plot(ax, quantiles, ale, color="black")
-            _ax_quantiles(ax, quantiles)
+            if plot_quantiles:
+                _ax_quantiles(ax, quantiles)
 
     elif len(features) == 2:
         if features_classes is None:
@@ -761,8 +774,9 @@ def ale_plot(
             )
             _second_order_quant_plot(fig, ax, quantiles_list, ale)
             _ax_labels(ax, *ax_labels)
-            for twin, quantiles in zip(("x", "y"), quantiles_list):
-                _ax_quantiles(ax, quantiles, twin=twin)
+            if plot_quantiles:
+                for twin, quantiles in zip(("x", "y"), quantiles_list):
+                    _ax_quantiles(ax, quantiles, twin=twin)
             _ax_title(
                 ax,
                 "Second-order ALE of features '{0}' and '{1}'".format(
