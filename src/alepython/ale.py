@@ -685,9 +685,10 @@ def ale_plot(
         discrete aspect of data.
     monte_carlo_rep : int
         Number of Monte-Carlo replicas.
-    monte_carlo_ratio : float
-        Proportion of randomly selected samples from dataset for each Monte-Carlo
-        replica.
+    monte_carlo_ratio : float or int
+        If a float is given, this determines the proportion of randomly selected
+        samples from `train_set` for each Monte-Carlo replica. An integer sets the
+        number of samples directly.
     rugplot_lim : int, optional
         If `train_set` has more rows than `rugplot_lim`, no rug plot will be plotted.
         Set to None to always plot rug plots. Set to 0 to always plot rug plots.
@@ -727,16 +728,17 @@ def ale_plot(
         if features_classes is None:
             # Continuous data.
             if monte_carlo:
+                if isinstance(monte_carlo_ratio, (int, np.integer)):
+                    rep_size = monte_carlo_ratio
+                else:
+                    rep_size = int(monte_carlo_ratio * train_set.shape[0])
                 for _ in tqdm(
                     range(monte_carlo_rep),
                     desc="Calculating MC replicas",
                     disable=not verbose,
                 ):
                     train_set_rep = train_set.iloc[
-                        np.random.randint(
-                            train_set.shape[0],
-                            size=int(monte_carlo_ratio * train_set.shape[0]),
-                        )
+                        np.random.randint(train_set.shape[0], size=rep_size,)
                     ]
                     # The same quantiles cannot be reused here as this could cause
                     # some bins to be empty or contain disproportionate numbers of
