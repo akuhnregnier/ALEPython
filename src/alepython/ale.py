@@ -660,6 +660,7 @@ def ale_plot(
     rugplot_lim=1000,
     verbose=False,
     plot_quantiles=True,
+    center=False,
 ):
     """Plots ALE function of specified features based on training set.
 
@@ -696,6 +697,12 @@ def ale_plot(
         If True, output additional information, such as Monte Carlo progress updates.
     plot_quantiles : bool, optional
         Add an axis to the figure that shows the feature quantiles.
+    center : bool, optional
+        Only applies to first-order ALE plotting (1 feature). If True, align the
+        initial points of the Monte Carlo replicas to more easily isolate their
+        divergence from the overall first-order ALE. The resulting lines will no
+        longer represent true ALE plots.
+
 
     Raises
     ------
@@ -727,6 +734,10 @@ def ale_plot(
 
         if features_classes is None:
             # Continuous data.
+            ale, quantiles = _first_order_ale_quant(
+                predictor, train_set, features[0], bins
+            )
+
             if monte_carlo:
                 if isinstance(monte_carlo_ratio, (int, np.integer)):
                     rep_size = monte_carlo_ratio
@@ -746,13 +757,13 @@ def ale_plot(
                     mc_ale, mc_quantiles = _first_order_ale_quant(
                         predictor, train_set_rep, features[0], bins
                     )
+                    if center:
+                        # Align start of ALE plots to the overall ALE plot.
+                        mc_ale -= mc_ale[0] - ale[0]
                     _first_order_quant_plot(
                         ax, mc_quantiles, mc_ale, color="#1f77b4", alpha=0.06
                     )
 
-            ale, quantiles = _first_order_ale_quant(
-                predictor, train_set, features[0], bins
-            )
             _ax_labels(ax, *ax_labels)
             _ax_title(
                 ax,
