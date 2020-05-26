@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """ALE plotting for continuous or categorical features."""
+import math
 from collections.abc import Iterable
 from functools import reduce
 from itertools import product
@@ -19,6 +20,39 @@ logger.disable("alepython")
 
 
 __all__ = ("ale_plot",)
+
+
+def _sci_format(x, scilim=2):
+    """Conditional string formatting.
+
+    Parameters
+    ----------
+    x : array-like
+        Values to format.
+    scilim : float, optional
+        If the decimal logarithm of `x` varies by more than `scilim`, scientific
+        notation will be used.
+
+    Returns
+    -------
+    formatted : array-like
+        Formatted string values.
+
+    """
+    log_x = np.log10(x)
+    log_ptp = np.ptp(log_x)
+    if log_ptp > scilim:
+        return [
+            np.format_float_scientific(v, precision=1, unique=False, exp_digits=1)
+            for v in x
+        ]
+    else:
+        min_log = np.min(log_x)
+        if min_log < 0:
+            dec = math.ceil(np.abs(min_log)) + (1 if log_ptp <= 1 else 0)
+        else:
+            dec = 0
+        return [f"{v:0.{dec}f}" for v in x]
 
 
 def _parse_features(features):
@@ -226,6 +260,8 @@ def _first_order_quant_plot(ax, quantiles, ale, **kwargs):
         Additional keyword parameters are passed to `ax.plot`.
 
     """
+    kwargs["marker"] = kwargs.get("marker", "o")
+    kwargs["ms"] = kwargs.get("ms", 3)
     ax.plot(_get_centres(quantiles), ale, **kwargs)
 
 
@@ -268,7 +304,7 @@ def _second_order_quant_plot(
 
     X, Y = np.meshgrid(x, y, indexing="xy")
     ale_interp = scipy.interpolate.interp2d(centres_list[0], centres_list[1], ale.T)
-    CF = ax.contourf(X, Y, ale_interp(x, y), cmap="bwr", levels=30, alpha=0.7, **kwargs)
+    CF = ax.contourf(X, Y, ale_interp(x, y), levels=30, alpha=0.85, **kwargs)
 
     if mark_empty and np.any(ale.mask):
         # Do not autoscale, so that boxes at the edges (contourf only plots the bin
@@ -661,6 +697,8 @@ def ale_plot(
     verbose=False,
     plot_quantiles=True,
     center=False,
+    quantile_axis=False,
+    scilim=2,
 ):
     """Plots ALE function of specified features based on training set.
 
@@ -702,7 +740,20 @@ def ale_plot(
         initial points of the Monte Carlo replicas to more easily isolate their
         divergence from the overall first-order ALE. The resulting lines will no
         longer represent true ALE plots.
+    quantile_axis : bool or str, optional
+        If True, quantiles are evenly spaced. If a 2D ALE plot is requested, this
+        applies to both axis. Alternatively, axes can be selected using 'x', 'y', or
+        'both'. Disables `plot_quantiles` for the affected axes.
+    scilim : float, optional
+        If the decimal logarithm of the axis tick labels varies by more than `scilim`,
+        tick labels will be formatted using scientific notation.
 
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        ALE plot figure.
+    ax : matplotlib.axes.Axes
+        ALE plot axes.
 
     Raises
     ------
@@ -729,6 +780,14 @@ def ale_plot(
     fig, ax = plt.subplots()
 
     if len(features) == 1:
+        if quantile_axis:
+            if quantile_axis in ("y", "both"):
+                raise ValueError(
+                    "If one feature is given, only 'x' or True are supported "
+                    f"arguments for 'quantile_axis'. Got: {repr(quantile_axis)}."
+                )
+            plot_quantiles = False
+
         if not isinstance(bins, (int, np.integer)):
             raise ValueError("1 feature was given, but 'bins' was not an integer.")
 
@@ -737,6 +796,8 @@ def ale_plot(
             ale, quantiles = _first_order_ale_quant(
                 predictor, train_set, features[0], bins
             )
+            if quantile_axis:
+                quantile_indices = np.arange(len(quantiles))
 
             if monte_carlo:
                 if isinstance(monte_carlo_ratio, (int, np.integer)):
@@ -749,7 +810,7 @@ def ale_plot(
                     disable=not verbose,
                 ):
                     train_set_rep = train_set.iloc[
-                        np.random.randint(train_set.shape[0], size=rep_size,)
+                        np.random.randint(train_set.shape[0], size=rep_size)
                     ]
                     # The same quantiles cannot be reused here as this could cause
                     # some bins to be empty or contain disproportionate numbers of
@@ -760,6 +821,11 @@ def ale_plot(
                     if center:
                         # Align start of ALE plots to the overall ALE plot.
                         mc_ale -= mc_ale[0] - ale[0]
+                    if quantile_axis:
+                        # Interpolate the quantiles to the original quantiles.
+                        mc_quantiles = np.interp(
+                            mc_quantiles, quantiles, quantile_indices
+                        )
                     _first_order_quant_plot(
                         ax, mc_quantiles, mc_ale, color="#1f77b4", alpha=0.06
                     )
@@ -772,29 +838,77 @@ def ale_plot(
                     len(quantiles) - 1, monte_carlo_rep if monte_carlo else "False"
                 ),
             )
+
             ax.grid(True, linestyle="-", alpha=0.4)
+            ax.ticklabel_format(axis="x", style="sci", scilimits=(0, 0))
+
             if rugplot_lim is None or train_set.shape[0] <= rugplot_lim:
                 sns.rugplot(train_set[features[0]], ax=ax, alpha=0.2)
-            _first_order_quant_plot(ax, quantiles, ale, color="black")
+
+            if quantile_axis:
+                _first_order_quant_plot(ax, quantile_indices, ale, color="black")
+
+                ax.set_xticks(_get_centres(quantile_indices))
+                ax.set_xticklabels(_sci_format(_get_centres(quantiles), scilim=scilim))
+            else:
+                _first_order_quant_plot(ax, quantiles, ale, color="black")
+
             if plot_quantiles:
                 _ax_quantiles(ax, quantiles)
 
     elif len(features) == 2:
+        if quantile_axis:
+            if quantile_axis == "x":
+                plot_quantiles = "y"
+                quantile_axis_list = ("x",)
+            elif quantile_axis == "y":
+                plot_quantiles = "x"
+                quantile_axis_list = ("y",)
+            else:
+                quantile_axis_list = ("x", "y")
+                plot_quantiles = False
+        else:
+            quantile_axis_list = ()
+
         if features_classes is None:
             # Continuous data.
             ale, quantiles_list = _second_order_ale_quant(
                 predictor, train_set, features, bins
             )
-            _second_order_quant_plot(fig, ax, quantiles_list, ale)
-            _ax_labels(ax, *ax_labels)
+            if quantile_axis_list:
+                plotting_quantiles_list = []
+                for axis, quantiles in zip(("x", "y"), quantiles_list):
+                    if axis in quantile_axis_list:
+                        inds = np.arange(len(quantiles))
+                        plotting_quantiles_list.append(inds)
+                        ax.set(**{f"{axis}ticks": _get_centres(inds)})
+                        ax.set(
+                            **{
+                                f"{axis}ticklabels": _sci_format(
+                                    _get_centres(quantiles), scilim=scilim
+                                )
+                            }
+                        )
+                    else:
+                        plotting_quantiles_list.append(quantiles)
+
+                _second_order_quant_plot(fig, ax, plotting_quantiles_list, ale)
+            else:
+                _second_order_quant_plot(fig, ax, quantiles_list, ale)
+
             if plot_quantiles:
-                for twin, quantiles in zip(("x", "y"), quantiles_list):
-                    _ax_quantiles(ax, quantiles, twin=twin)
+                if plot_quantiles == "x":
+                    _ax_quantiles(ax, quantiles_list[0], twin="x")
+                elif plot_quantiles == "y":
+                    _ax_quantiles(ax, quantiles_list[1], twin="y")
+                else:
+                    for twin, quantiles in zip(("x", "y"), quantiles_list):
+                        _ax_quantiles(ax, quantiles, twin=twin)
+
+            _ax_labels(ax, *ax_labels)
             _ax_title(
                 ax,
-                "Second-order ALE of features '{0}' and '{1}'".format(
-                    features[0], features[1]
-                ),
+                f"Second-order ALE of features '{features[0]}' and '{features[1]}'",
                 "Bins : {0}x{1}".format(*[len(quant) - 1 for quant in quantiles_list]),
             )
     else:
@@ -803,3 +917,4 @@ def ale_plot(
                 n_feat=len(features)
             )
         )
+    return fig, ax
