@@ -730,7 +730,7 @@ def ale_plot(
         number of samples directly.
     rugplot_lim : int, optional
         If `train_set` has more rows than `rugplot_lim`, no rug plot will be plotted.
-        Set to None to always plot rug plots. Set to 0 to always plot rug plots.
+        Set to None to always plot rug plots. Set to 0 to disable rug plots.
     verbose : bool, optional
         If True, output additional information, such as Monte Carlo progress updates.
     plot_quantiles : bool, optional
