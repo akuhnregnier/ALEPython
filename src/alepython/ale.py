@@ -39,7 +39,7 @@ def _sci_format(x, scilim=2):
         Formatted string values.
 
     """
-    log_x = np.log10(x)
+    log_x = np.log10(np.abs(x))
     log_ptp = np.ptp(log_x)
     if log_ptp > scilim:
         return [
