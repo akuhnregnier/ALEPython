@@ -557,7 +557,7 @@ def second_order_quant_plot(
     if fig is None and ax is None:
         fig, ax = plt.gcf(), plt.gca()
     elif fig is not None and ax is None:
-        ax = fig.add_subplots(111)
+        ax = fig.add_subplot(111)
     elif fig is None and ax is not None:
         raise ValueError("An axis ('ax') was supplied without a figure ('fig').")
 
@@ -812,7 +812,8 @@ def second_order_ale_quant(
         effects.
     n_jobs : int, optional
         The number of cores to use for parallel processing when querying for nearest
-        neighbour bins when substituting empty bins. -1 uses all processors.
+        neighbour bins while substituting empty bins. If -1 is given, all processors
+        are used.
     n_neighbour : int, optional
         Number of nearest neighbour bins to average when substituting empty bins.
     neighbour_thres : float in [0, 1], optional
@@ -1071,6 +1072,11 @@ def ale_plot(
     include_first_order=False,
     plot_kwargs=None,
     grid_kwargs=None,
+    n_jobs=1,
+    n_neighbour=10,
+    neighbour_thres=0.1,
+    return_data=False,
+    return_mc_data=False,
 ):
     """Plots ALE function of specified features based on training set.
 
@@ -1139,6 +1145,23 @@ def ale_plot(
         Parameters passed to `ax.grid()` for a 1D ALE plot. Giving False disables the
         plotting of a grid. By default, major grid lines are shown with a linestyle of
         '--' and alpha value of 0.4.
+    n_jobs : int, optional
+        Applies to 2D ALE plotting only. The number of cores to use for parallel
+        processing when querying for nearest neighbour bins while substituting empty
+        bins. If -1 is given, all processors are used.
+    n_neighbour : int, optional
+        Applies to 2D ALE plotting only. Number of nearest neighbour bins to average
+        when substituting empty bins.
+    neighbour_thres : float in [0, 1], optional
+        Applies to 2D ALE plotting only. Limit the number of nearest neighbour bins
+        used to substitute empty bins to at most `n_neighbour` or the number of cells
+        needed to account for a fraction of `neighbour_thres` of samples, which ever
+        is smaller.
+    return_data : bool, optional
+        Return the output of `first_order_ale_quant()` for first-order ALE plots, and
+        the output of `second_order_ale_quant()` for second-order ALE plots.
+    return_mc_data : bool, optional
+        Return the Monte Carlo quantile and ALE data for the first order ALE plot.
 
     Returns
     -------
@@ -1147,6 +1170,14 @@ def ale_plot(
     axes : dict of matplotlib Axes
         Axes containing the ALE plot and other elements like a colorbar or quantile
         axes, depending on the parameters given.
+    data : tuple
+        Present only if `return_data` is `True`. Contains the return values of either
+        `first_order_ale_quant()` or `second_order_ale_quant()` depending on the
+        number of items in `features`.
+    mc_data : tuple
+        Present only if `return_mc_data` is `True`. Contains the return values of
+        `first_order_ale_quant()` for the Monte Carlo replicas. If a second-order ALE
+        plot is carried out or `monte_carlo` is `False`, this will be empty.
 
     Raises
     ------
@@ -1172,11 +1203,13 @@ def ale_plot(
         fig, ax = plt.gcf(), plt.gca()
     elif fig is not None and ax is None:
         logger.debug("Creating axis from figure {}.", fig)
-        ax = fig.add_subplots(111)
+        ax = fig.add_subplot(111)
     elif fig is None and ax is not None and len(features) == 2:
         raise ValueError("An axis ('ax') was supplied without a figure ('fig').")
 
     axes = {"ale": ax}
+    return_vals = [fig, axes]
+    mc_return_vals = []
 
     if features_classes is not None:
         raise NotImplementedError("'features_classes' is not implemented yet.")
@@ -1208,6 +1241,8 @@ def ale_plot(
             quantiles, ale = first_order_ale_quant(
                 predictor, train_set, features[0], bins
             )
+            if return_data:
+                return_vals.append((quantiles, ale))
             if quantile_axis:
                 mod_quantiles = np.arange(len(quantiles))
                 ax.set_xticks(mod_quantiles)
@@ -1239,6 +1274,8 @@ def ale_plot(
                     mc_quantiles, mc_ale = first_order_ale_quant(
                         predictor, train_set_rep, features[0], bins
                     )
+                    if return_mc_data:
+                        mc_return_vals.append((mc_quantiles, mc_ale))
                     if center:
                         # Align start of ALE plots to the overall ALE plot.
                         mc_ale -= mc_ale[0] - ale[0]
@@ -1248,6 +1285,8 @@ def ale_plot(
                     first_order_quant_plot(
                         mc_quantiles, mc_ale, ax=ax, **mc_plot_kwargs
                     )
+                if return_mc_data:
+                    return_vals.append(tuple(mc_return_vals))
 
             _ax_labels(ax, *ax_labels)
             mc_string = monte_carlo_rep if monte_carlo else "False"
@@ -1301,8 +1340,17 @@ def ale_plot(
             bins = _check_two_ints(bins)
 
             quantiles_list, ale, samples_grid = second_order_ale_quant(
-                predictor, train_set, features, bins, include_mean=include_first_order
+                predictor,
+                train_set,
+                features,
+                bins,
+                include_mean=include_first_order,
+                n_jobs=n_jobs,
+                n_neighbour=n_neighbour,
+                neighbour_thres=neighbour_thres,
             )
+            if return_data:
+                return_vals.append((quantiles_list, ale, samples_grid))
 
             if include_first_order:
                 # Compute first order ALEs.
@@ -1370,4 +1418,4 @@ def ale_plot(
         raise ValueError(
             f"'{len(features)}' 'features' were given, but only 1 or 2 are supported."
         )
-    return fig, axes
+    return tuple(return_vals)
