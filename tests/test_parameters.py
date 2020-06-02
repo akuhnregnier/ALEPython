@@ -8,7 +8,7 @@ from alepython.ale import (
     _ax_quantiles,
     _check_two_ints,
     _get_quantiles,
-    _second_order_ale_quant,
+    second_order_ale_quant,
 )
 
 from .utils import SimpleModel
@@ -28,7 +28,7 @@ def test_quantiles():
 
 def test_second_order_ale_quant():
     with pytest.raises(ValueError, match=r".*contained '1' features.*"):
-        _second_order_ale_quant(lambda x: None, pd.DataFrame({"a": [1, 2, 3]}), "a", 1)
+        second_order_ale_quant(lambda x: None, pd.DataFrame({"a": [1, 2, 3]}), "a", 1)
 
 
 def test_ale_plot():

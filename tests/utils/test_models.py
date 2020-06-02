@@ -26,15 +26,19 @@ def linear_predictor(X):
 
 
 def interaction_predictor(X):
-    """Interaction changes sign at b = 0.5."""
+    """Interaction changes sign at b = 0.5.
+
+    Assumes b is uniformly distributed in [0, 1).
+
+    """
     a = X["a"]
     b = X["b"]
 
     out = np.empty_like(a)
 
-    mask = b <= 0.5
+    mask = b < 0.5
     out[mask] = a[mask] * b[mask]
     mask = ~mask
-    out[mask] = -a[mask] * b[mask]
+    out[mask] = -a[mask] * (1 - b[mask])
 
     return out

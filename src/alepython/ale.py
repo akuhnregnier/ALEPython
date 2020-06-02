@@ -2,9 +2,8 @@
 """ALE plotting for continuous or categorical features."""
 import math
 from collections.abc import Iterable
-from functools import reduce
+from functools import partial
 from itertools import product
-from operator import add
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,14 +11,21 @@ import pandas as pd
 import scipy
 import seaborn as sns
 from loguru import logger
+from matplotlib import colors
 from matplotlib.patches import Rectangle
 from scipy.spatial import cKDTree
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 logger.disable("alepython")
 
 
-__all__ = ("ale_plot",)
+__all__ = (
+    "ale_plot",
+    "first_order_ale_quant",
+    "first_order_quant_plot",
+    "second_order_ale_quant",
+    "second_order_quant_plot",
+)
 
 
 def _sci_format(x, scilim=2):
@@ -133,29 +139,178 @@ def _check_two_ints(values):
     return values
 
 
-def _get_centres(x):
+def _full_slices(slices, axis=None, ndim=None):
+    """Add `slice(None)` to the `slices` tuple to fully index the given dimensions.
+
+    Parameters
+    ----------
+    slices : iterable of slice
+        Slices to pad.
+    axis : None or int or tuple of ints, optional
+        Which axis the slice objects in `slices` refer to. By default, given slices
+        are interpreted to refer to the first dimensions.
+    ndim : int, optional
+        How many dimensions should be indexed with the returned tuple. By default, the
+        number of slices or one plus the largest axis value is used, whichever one is
+        larger.
+
+    Returns
+    -------
+    slices : tuple
+        A tuple containing `slices`, padded with as many empty slices as needed to
+        index `ndim` dimensions, inserted either before, after or in between the
+        entries in `slices`, depending on `axis`.
+
+    Raises
+    ------
+    ValueError
+        If `axis` contains more elements than `slices`.
+    ValueError
+        If `ndim` is less than or equal to the largest `axis` value.
+
+    Examples
+    --------
+    >>> _full_slices((slice(1),), axis=1, ndim=2)
+    (slice(None, None, None), slice(None, 1, None))
+    >>> _full_slices((slice(1), slice(2)), axis=(1, 2), ndim=3)
+    (slice(None, None, None), slice(None, 1, None), slice(None, 2, None))
+
+    """
+    if axis is None:
+        axis = tuple(range(len(slices)))
+    elif isinstance(axis, (int, np.integer)):
+        axis = (axis,)
+
+    if len(axis) > len(slices):
+        raise ValueError(
+            f"Expected at most {len(slices)} entries in axis. Got axis {repr(axis)}.'"
+        )
+
+    if ndim is None:
+        ndim = max((len(slices), max(axis) + 1))
+
+    if ndim <= max(axis):
+        raise ValueError(
+            f"'ndim' {repr(ndim)} is incompatible with 'axis' {repr(axis)}."
+        )
+
+    out = [slice(None)] * ndim
+    for s, ax in zip(slices, axis):
+        out[ax] = s
+    return tuple(out)
+
+
+def _get_centres(x, axis=0, inplace=False):
     """Return bin centres from bin edges.
 
     Parameters
     ----------
     x : array-like
-        The first axis of `x` will be averaged.
+        The array to be averaged, where all dimensions referred to by `axis` must have
+        a size of at least two.
+    axis : None or int or tuple of ints, optional
+        The axis or axes over which to compute the centres. By default the centres are
+        computed over the first axis. Negative entries are converted to positive
+        entries by adding the number of dimensions of `x`, so that `axis=-1` refers to
+        the last dimension.
+    inplace : bool, optional
+        Compute the result in `x` without allocating a new array to hold the output. A
+        copy may still have to be created, e.g. if `x` is not an `np.ndarray` (or
+        subclass thereof) or does not have a floating point dtype. While not only
+        potentially saving memory, this method may also be faster.
 
     Returns
     -------
     centres : array-like
-        The centres of `x`, the shape of which is (N - 1, ...) for
-        `x` with shape (N, ...).
+        The centres of `x`, the shape of which is (I - 1, ...) for
+        `x` with shape (I, ...) when `axis=0` (default).
+
+        For multiple axes, e.g. `axis=(0, 1)`, the centres of `x` will have shape
+        (I - 1, J - 1, ...) for `x` with shape (I, J, ...).
+
+        If the input array already has a floating point dtype, `centres` will have the
+        same dtype, and `numpy.float64` otherwise.
+
+    Raises
+    ------
+    ValueError
+        If an element of `axis` is out of bounds given the shape of `x`.
+    ValueError
+        If one of the dimensions specified by `axis` has a size of less than two.
+    ValueError
+        If `axis` contains duplicated elements.
 
     Examples
     --------
     >>> import numpy as np
-    >>> x = np.array([0, 1, 2, 3])
-    >>> _get_centres(x)
+    >>> _get_centres(np.array([0, 1, 2, 3]))
     array([0.5, 1.5, 2.5])
+    >>> _get_centres([[1,2,3], [1,5,3]], axis=(0, 1))
+    array([[2.25, 3.25]])
+    >>> _get_centres([[1,2,3], [1,5,3]], axis=(1, 0))
+    array([[2.25, 3.25]])
+    >>> x = np.array([0, 1, 2, 3])
+    >>> c = _get_centres(x)
+    >>> np.all(x[:-1] == c)
+    False
+    >>> # Since `x` does not have a floating point dtype, this will not succeed.
+    >>> # _get_centres(x, inplace=True)
+    >>> xf = x.astype('float16')
+    >>> c = _get_centres(xf, inplace=True)
+    >>> c
+    array([0.5, 1.5, 2.5], dtype=float16)
+    >>> np.all(xf[:-1] == c)
+    True
 
     """
-    return (x[1:] + x[:-1]) / 2
+    if axis is None:
+        axis = (0,)
+    elif isinstance(axis, (int, np.integer)):
+        axis = (axis,)
+
+    dtype = np.float64
+    if isinstance(x, np.ndarray):
+        if x.dtype.kind == "f":
+            # Do not change the dtype if it is already a floating point type.
+            dtype = None
+
+    if inplace:
+        x = np.asanyarray(x, dtype=dtype)
+    else:
+        # Copy the array.
+        x = np.array(x, subok=True, dtype=dtype)
+
+    ndim = len(x.shape)
+
+    # Convert negative axis entries.
+    axis = tuple(ax if ax >= 0 else ndim + ax for ax in axis)
+
+    # Check axis bounds.
+    if max(axis) >= ndim:
+        raise ValueError(
+            f"The axis entry '{max(axis)}' is out of bounds given the number of "
+            f"dimensions '{ndim}'"
+        )
+
+    if len(set(axis)) != len(axis):
+        raise ValueError(f"Duplicated entries were found in axis {repr(axis)}.")
+
+    if any(x.shape[ax] < 2 for ax in axis):
+        raise ValueError(
+            f"Expected all dimensions specified by 'axis' {repr(axis)} to have a "
+            f"size of at least two, but got shape {repr(x.shape)}."
+        )
+
+    nd_slices = partial(_full_slices, ndim=ndim)
+
+    for ax in axis:
+        x[nd_slices((slice(-1),), axis=ax)] += x[nd_slices((slice(1, None),), axis=ax)]
+        # Remove the now extraneous elements from the current dimension, since it has
+        # already been aggregated.
+        x = x[nd_slices((slice(-1),), axis=ax)]
+
+    x /= 2 * len(axis)
+    return x
 
 
 def _ax_title(ax, title, subtitle=""):
@@ -163,7 +318,7 @@ def _ax_title(ax, title, subtitle=""):
 
     Parameters
     ----------
-    ax : matplotlib.axes.Axes
+    ax : matplotlib Axes
         Axes object to add title to.
     title : str
         Axis title.
@@ -179,7 +334,7 @@ def _ax_labels(ax, xlabel=None, ylabel=None):
 
     Parameters
     ----------
-    ax : matplotlib.axes.Axes
+    ax : matplotlib Axes
         Axes object to add labels to.
     xlabel : str, optional
         X axis label.
@@ -198,12 +353,17 @@ def _ax_quantiles(ax, quantiles, twin="x"):
 
     Parameters
     ----------
-    ax : matplotlib.axes.Axes
+    ax : matplotlib Axes
         Axis to modify.
     quantiles : array-like
         Quantiles to plot.
     twin : {'x', 'y'}, optional
         Select the axis for which to plot quantiles.
+
+    Returns
+    -------
+    ax_mod : matplotlib Axes
+        Axis containing the quantile ticks.
 
     Raises
     ------
@@ -232,26 +392,26 @@ def _ax_quantiles(ax, quantiles, twin="x"):
     # If there is a fractional part, add a decimal place to show (part of) it.
     fractional = (~np.isclose(percentages % 1, 0)).astype("int8")
 
-    getattr(ax_mod, "set_{twin}ticklabels".format(twin=twin))(
+    getattr(ax_mod, f"set_{twin}ticklabels")(
         [
-            "{0:0.{1}f}%".format(percent, format_fraction)
+            f"{percent:0.{format_fraction}f}%"
             for percent, format_fraction in zip(percentages, fractional)
         ],
         color="#545454",
         fontsize=7,
     )
-    getattr(ax_mod, "set_{twin}lim".format(twin=twin))(
-        getattr(ax, "get_{twin}lim".format(twin=twin))()
-    )
+    getattr(ax_mod, f"set_{twin}lim")(getattr(ax, f"get_{twin}lim")())
+    return ax_mod
 
 
-def _first_order_quant_plot(ax, quantiles, ale, **kwargs):
+def first_order_quant_plot(quantiles, ale, ax=None, **kwargs):
     """First order ALE plot.
 
     Parameters
     ----------
-    ax : matplotlib.axes.Axes
-        Axis to plot onto.
+    ax : matplotlib Axes
+        Axis to plot onto. If None (default), the current axis will be used (a new one
+        will be created if needed).
     quantiles : array-like
         ALE quantiles.
     ale : array-like
@@ -259,71 +419,257 @@ def _first_order_quant_plot(ax, quantiles, ale, **kwargs):
     **kwargs : plot properties, optional
         Additional keyword parameters are passed to `ax.plot`.
 
+    Returns
+    -------
+    axes : dict of matplotlib Axes
+        Axes containing the ALE plot and potentially other elements depending on the
+        parameters given.
+
     """
-    kwargs["marker"] = kwargs.get("marker", "o")
-    kwargs["ms"] = kwargs.get("ms", 3)
-    ax.plot(_get_centres(quantiles), ale, **kwargs)
+    if "marker" not in kwargs:
+        kwargs["marker"] = "o"
+    if "ms" not in kwargs:
+        kwargs["ms"] = 3
+
+    if ax is None:
+        ax = plt.gca()
+
+    ax.plot(quantiles, ale, **kwargs)
+    return {"ale": ax}
 
 
-def _second_order_quant_plot(
-    fig, ax, quantiles_list, ale, mark_empty=True, n_interp=50, **kwargs
+class MidpointNormalize(colors.Normalize):
+    def __init__(self, *args, midpoint=None, **kwargs):
+        self.midpoint = midpoint
+        super().__init__(*args, **kwargs)
+
+    def __call__(self, value, clip=None):
+        # Simple mapping between the color range halves and vmin and vmax.
+        result, _ = self.process_value(value)
+        x, y = [self.vmin, self.midpoint, self.vmax], [0, 0.5, 1]
+        return np.ma.masked_array(np.interp(value, x, y), mask=result.mask)
+
+
+def second_order_quant_plot(
+    quantiles_list, ale, samples=None, fig=None, ax=None, **kwargs
 ):
     """Second order ALE plot.
 
     Parameters
     ----------
-    ax : matplotlib.axes.Axes
-        Axis to plot onto.
-    quantiles_list : array-like
+    quantiles_list : (2, M, N) array-like
         ALE quantiles for the first (`quantiles_list[0]`) and second
         (`quantiles_list[1]`) features.
-    ale : masked array
-        ALE to plot. Where `ale.mask` is True, this denotes bins where no samples were
-        available. See `mark_empty`.
-    mark_empty : bool, optional
-        If True, plot rectangles over bins that did not contain any samples.
+    ale : (M, N) masked array
+        ALE to plot (see `second_order_ale_quant()`).
+    samples : (M - 1, N - 1) array, optional
+        The number of samples in each quantile bin. Used to determine empty cells.
+    fig : matplotlib Figure
+        Figure to plot onto. Required to plot colorbar. The current figure and axes
+        will be used if both `fig` and `ax` are None (default). Will be used to create
+        `ax` if only `ax` is `None`.
+    ax : matplotlib Axes
+        Axis to plot onto. If None (default), the current axis will be used (a new one
+        will be created if needed).
+
+    Returns
+    -------
+    fig : matplotlib Figure
+        ALE plot figure.
+    axes : dict of matplotlib Axes
+        Axes containing the ALE plot and other elements like a colorbar depending on
+        the parameters given.
+
+    Other Parameters
+    ----------------
+    kind : {'contourf', 'grid', 'gridcontour'}, optional
+        Type of visualisation. 'contourf' first interpolates `ale` before plotting the
+        contours on `levels` levels. By default ('gridcontour'), raw values are
+        plotted on a grid and overlaid with a labelled contours with `levels` levels.
+    masking : {'clip', bool}, optional
+        If True (default), the `ale.mask` will be used to ignore masked points. If
+        False, the mask will be discarded. If 'clip', 'vmin' and 'vmax' are set using
+        unmasked data only.
+    min_samples : int, optional
+        Cells where `samples` <= `min_samples` will be indicated using grey
+        rectangles (see `indicate_empty`). By default, `min_samples` is 1, meaning
+        that only quantile bins with no data are considered invalid.
+    indicate_empty : {float, bool}, optional
+        By default (`indicate_empty=0.4`), empty quantile bins are shaded grey if
+        `samples` is given. Higher values (up to 1) will increase the shading
+        opacity. Giving False will disable the indication of empty bins.
     n_interp : [2-iterable of] int, optional
-        The number of interpolated samples generated from `ale` prior to contour
-        plotting. Two integers may be given to specify different interpolation steps
-        for the two features.
-    **kwargs : contourf properties, optional
-        Additional keyword parameters are passed to `ax.contourf`.
+        Applies to `kind` 'contourf' and 'gridcontour'. The number of interpolated
+        samples generated from `ale` prior to contour plotting. Two integers may be
+        given to specify different interpolation steps for the two features. If 0 is
+        given, interpolation is disabled. By default three times the number of bins
+        along each axis are used.
+    interp_mask_thres : float, optional
+        If `masking` is True, `ale.mask` is interpolated for `kind=contourf`. The
+        bilinear interpolation yields fractional values ranging from 0 (all source
+        points valid) to 1 (all source points invalid) based on the original point
+        validity and distance to the target point. If the interpolated mask value
+        exceeds `interp_mask_thres` (0.5 by default), the resulting interpolated point
+        will be masked.
+    levels : int, optional
+        Applies to `kind` 'contourf' and 'gridcontour'. The number of contour levels.
+        The default is 10.
+    colorbar : {False, 'centered', 'symmetric'}, optional
+        If `False`, do not plot a colorbar. If 'centered' or 'symmetric', the colorbar
+        is centered at 0. If 'centered', colors are chosen according to the range
+        [0, `min(ale)`] for negative values and [0, `max(ale)`] for positive values.
+        If 'symmetric',the equivalent ranges are [0, `-max(abs(ale))`] and
+        [0, `max(abs(ale))`]. The latter is useful when wanting to distinguish not
+        only the sign, but also relative magnitudes of `ale`. Both options change
+        `cmap` to 'bwr'. Relevant parameters in `kwargs` have precedence.
+    colorbar_kwargs : dict, optional
+        Parameters to pass to `fig.colorbar()`.
+    **kwargs : optional
+        Depending on `kind`, additional keyword parameters are passed to
+        `ax.contourf()` ('contourf') or `ax.pcolormesh()` ('grid', 'gridcontour').
 
     Raises
     ------
     ValueError
-        If `n_interp` values were not integers.
+        If `fig` is `None`, but `ax` is not None.
     ValueError
-        If more than 2 values were given for `n_interp`.
+        If `n_interp` values are not integers.
+    ValueError
+        If more than 2 values are given for `n_interp`.
+    ValueError
+        If an unknown `kind` is given.
 
     """
-    centres_list = [_get_centres(quantiles) for quantiles in quantiles_list]
-    n_x, n_y = _check_two_ints(n_interp)
-    x = np.linspace(centres_list[0][0], centres_list[0][-1], n_x)
-    y = np.linspace(centres_list[1][0], centres_list[1][-1], n_y)
+    # Record the originally submitted arguments.
+    orig_kw = locals()["kwargs"].copy()
 
-    X, Y = np.meshgrid(x, y, indexing="xy")
-    ale_interp = scipy.interpolate.interp2d(centres_list[0], centres_list[1], ale.T)
-    CF = ax.contourf(X, Y, ale_interp(x, y), levels=30, alpha=0.85, **kwargs)
+    kind = kwargs.pop("kind", "gridcontour")
+    masking = kwargs.pop("masking", True)
+    min_samples = kwargs.pop("min_samples", 1)
+    indicate_empty = kwargs.pop("indicate_empty", 0.4)
+    levels = kwargs.pop("levels", 10)
+    colorbar = kwargs.pop("colorbar", True)
+    colorbar_kwargs = kwargs.pop("colorbar_kwargs", {})
 
-    if mark_empty and np.any(ale.mask):
-        # Do not autoscale, so that boxes at the edges (contourf only plots the bin
-        # centres, not their edges) don't enlarge the plot.
-        plt.autoscale(False)
-        # Add rectangles to indicate cells without samples.
-        for i, j in zip(*np.where(ale.mask)):
-            ax.add_patch(
-                Rectangle(
-                    [quantiles_list[0][i], quantiles_list[1][j]],
-                    quantiles_list[0][i + 1] - quantiles_list[0][i],
-                    quantiles_list[1][j + 1] - quantiles_list[1][j],
-                    linewidth=1,
-                    edgecolor="k",
-                    facecolor="none",
-                    alpha=0.4,
+    if "zorder" not in kwargs:
+        kwargs["zorder"] = 1
+
+    if fig is None and ax is None:
+        fig, ax = plt.gcf(), plt.gca()
+    elif fig is not None and ax is None:
+        ax = fig.add_subplots(111)
+    elif fig is None and ax is not None:
+        raise ValueError("An axis ('ax') was supplied without a figure ('fig').")
+
+    axes = {"ale": ax}
+
+    if not masking:
+        # Ignore the ALE mask.
+        ale.mask = False
+    elif masking == "clip":
+        # Set vmin, vmax from masked data, then discard the mask.
+        if "vmin" not in kwargs:
+            kwargs["vmin"] = np.min(ale)
+        if "vmax" not in kwargs:
+            kwargs["vmax"] = np.max(ale)
+        ale.mask = False
+
+    if samples is not None:
+        missing = samples < min_samples
+    else:
+        missing = False
+
+    if np.any(missing):
+        if not np.isclose(indicate_empty, 0):
+            # Add rectangles to indicate cells without samples.
+            for i, j in zip(*np.where(missing)):
+                ax.add_patch(
+                    Rectangle(
+                        [quantiles_list[0][i], quantiles_list[1][j]],
+                        quantiles_list[0][i + 1] - quantiles_list[0][i],
+                        quantiles_list[1][j + 1] - quantiles_list[1][j],
+                        linewidth=1,
+                        edgecolor="none",
+                        facecolor="k",
+                        alpha=indicate_empty,
+                        zorder=3,
+                    )
                 )
+
+    if "norm" not in kwargs:
+        if colorbar in ("centered", "symmetric"):
+            kwargs["norm"] = MidpointNormalize(midpoint=0)
+
+            if colorbar == "symmetric" and not {"vmin", "vmax"}.intersection(orig_kw):
+                # Only modify 'vmin' and 'vmax' if they were not given originally.
+                kwargs["vmax"] = max(
+                    (
+                        abs(kwargs.get("vmin", np.min(ale))),
+                        kwargs.get("vmax", np.max(ale)),
+                    )
+                )
+                kwargs["vmin"] = -kwargs["vmax"]
+
+            # Change the default colormap to pronounce deviations from 0.
+            if "cmap" not in kwargs:
+                kwargs["cmap"] = "bwr"
+
+    if kind == "contourf":
+        n_interp = kwargs.pop("n_interp", None)
+        interp_mask_thres = kwargs.get("interp_mask_thres", 0.5)
+
+        if n_interp is not None:
+            ns = list(_check_two_ints(n_interp))
+            for i, (n, centres) in enumerate(zip(ns, quantiles_list)):
+                if n == 0:
+                    # Disable interpolation.
+                    ns[i] = len(centres)
+            n_x, n_y = ns
+        else:
+            n_x, n_y = 3 * len(quantiles_list[0]), 3 * len(quantiles_list[1])
+        x = np.linspace(quantiles_list[0][0], quantiles_list[0][-1], n_x)
+        y = np.linspace(quantiles_list[1][0], quantiles_list[1][-1], n_y)
+
+        X, Y = np.meshgrid(x, y, indexing="xy")
+        get_ale_interp = scipy.interpolate.interp2d(*quantiles_list, ale.data.T)
+        if np.any(ale.mask):
+            # Bilinear interpolation is applied to the mask (as floats). The resulting
+            # values are compared to the `interp_mask_thres` threshold to calculate
+            # the interpolated mask.
+            get_mask_interp = scipy.interpolate.interp2d(
+                *quantiles_list, ale.mask.T.astype("float64")
             )
-    fig.colorbar(CF)
+
+        ale_interp = get_ale_interp(x, y)
+        mask_interp = get_mask_interp(x, y)
+        masked_ale_interp = np.ma.MaskedArray(
+            ale_interp, mask=mask_interp > interp_mask_thres
+        )
+        img = ax.contourf(X, Y, masked_ale_interp, levels=levels, **kwargs)
+    elif kind in ("grid", "gridcontour"):
+        # Generate cell edges from the quantiles.
+        cell_edges_list = []
+        for quantiles in quantiles_list:
+            cell_edges_list.append(
+                np.asarray([quantiles[0], *_get_centres(quantiles), quantiles[-1]])
+            )
+        # Plot the grid.
+        img = ax.pcolormesh(*cell_edges_list, ale.T, **kwargs)
+
+        if kind == "gridcontour":
+            # Plot contour lines over the grid.
+            cs = ax.contour(
+                *quantiles_list, ale.T, levels=levels, colors="k", alpha=0.8, zorder=2
+            )
+            ax.clabel(cs)
+    else:
+        raise ValueError(f"Unknown 'kind' {repr(kind)}.")
+
+    if colorbar:
+        # Get the colorbar axis.
+        axes["colorbar"] = fig.colorbar(img, **colorbar_kwargs).ax
+
+    return fig, axes
 
 
 def _get_quantiles(train_set, feature, bins):
@@ -357,6 +703,8 @@ def _get_quantiles(train_set, feature, bins):
     (lower quantile, upper quantile], care has to taken that the smallest observation
     is included in the first bin. This is handled transparently by `np.digitize`.
 
+    Floating point errors can cause misassignment of quantiles in some cases.
+
     """
     if not isinstance(bins, (int, np.integer)):
         raise ValueError(
@@ -371,7 +719,7 @@ def _get_quantiles(train_set, feature, bins):
     return quantiles, bins
 
 
-def _first_order_ale_quant(predictor, train_set, feature, bins):
+def first_order_ale_quant(predictor, train_set, feature, bins, include_mean=False):
     """Estimate the first-order ALE function for single continuous feature data.
 
     Parameters
@@ -386,13 +734,15 @@ def _first_order_ale_quant(predictor, train_set, feature, bins):
         This defines the number of bins to compute. The effective number of bins may
         be less than this as only unique quantile values of train_set[feature] are
         used.
+    include_mean : bool, optional
+        Add the mean of all predictions to the output array.
 
     Returns
     -------
+    quantiles : array-like
+        Quantiles used.
     ale : array-like
         The first order ALE.
-    quantiles : array-like
-        The quantiles used.
 
     """
     quantiles, _ = _get_quantiles(train_set, feature, bins)
@@ -424,18 +774,24 @@ def _first_order_ale_quant(predictor, train_set, feature, bins):
 
     ale = np.array([0, *np.cumsum(mean_effects)])
 
-    # The uncentred mean main effects at the bin centres.
-    ale = _get_centres(ale)
+    # Centre the ALE by subtracting its expectation value.
+    ale -= np.sum(_get_centres(ale) * index_groupby.size() / train_set.shape[0])
 
-    # Centre the effects by subtracting the mean (the mean of the individual
-    # `effects`, which is equivalently calculated using `mean_effects` and the number
-    # of samples in each bin).
-    ale -= np.sum(ale * index_groupby.size() / train_set.shape[0])
-    return ale, quantiles
+    if include_mean:
+        ale += sum(np.mean(preds) for preds in predictions) / 2
+
+    return quantiles, ale
 
 
-def _second_order_ale_quant(
-    predictor, train_set, features, bins, return_samples_grid=False
+def second_order_ale_quant(
+    predictor,
+    train_set,
+    features,
+    bins,
+    include_mean=False,
+    n_jobs=1,
+    n_neighbour=10,
+    neighbour_thres=0.1,
 ):
     """Estimate the second-order ALE function for two continuous feature data.
 
@@ -451,19 +807,29 @@ def _second_order_ale_quant(
         This defines the number of bins to compute. The effective number of bins may
         be less than this as only unique quantile values of train_set[feature] are
         used. If one integer is given, this is used for both features.
-    return_samples_grid : bool, optional
-        Return the number of samples in each quantile bin.
+    include_mean : bool, optional
+        Add the mean of all predictions to the output. Useful for evaluating joint
+        effects.
+    n_jobs : int, optional
+        The number of cores to use for parallel processing when querying for nearest
+        neighbour bins when substituting empty bins. -1 uses all processors.
+    n_neighbour : int, optional
+        Number of nearest neighbour bins to average when substituting empty bins.
+    neighbour_thres : float in [0, 1], optional
+        Limit the number of nearest neighbour bins used to substitute empty bins to at
+        most `n_neighbour` or the number of cells needed to account for a fraction of
+        `neighbour_thres` of samples, which ever is smaller.
 
     Returns
     -------
-    ale : (M, N) masked array
-        The second order ALE. Elements are masked where no data was available.
-    quantiles : 2-tuple of array-like
+    quantiles : 2-tuple of array
         The quantiles used: first the quantiles for `features[0]` with shape (M + 1,),
         then for `features[1]` with shape (N + 1,).
-    samples_grid : (M, N) ndarray
-        Present only if `return_samples_grid=True`. The number of samples in each
-        quantile bin.
+    ale : (M, N) masked array
+        The second order ALE. Elements are masked where all adjacent quantiles touch
+        cells which did not contain any data (see `samples`).
+    samples : (M - 1, N - 1) array
+        The number of samples in each quantile bin.
 
     Raises
     ------
@@ -509,6 +875,7 @@ def _second_order_ale_quant(
         for i in range(2):
             mod_train_set[features[i]] = quantiles_list[i][indices_list[i] + shifts[i]]
         predictions[shifts] = predictor(mod_train_set)
+
     # The individual effects.
     effects = (predictions[(1, 1)] - predictions[(1, 0)]) - (
         predictions[(0, 1)] - predictions[(0, 0)]
@@ -531,24 +898,18 @@ def _second_order_ale_quant(
     n_samples = index_groupby.size().to_numpy()
 
     # Create a 2D array of the number of samples in each bin.
-    samples_grid = np.zeros(bins_list)
-    samples_grid[valid_grid_indices] = n_samples
+    samples = np.zeros(bins_list)
+    samples[valid_grid_indices] = n_samples
 
-    ale = np.ma.MaskedArray(
-        np.zeros((len(quantiles_list[0]), len(quantiles_list[1]))),
-        mask=np.ones((len(quantiles_list[0]), len(quantiles_list[1]))),
-    )
-    # Mark the first row/column as valid, since these are meant to contain 0s.
-    ale.mask[0, :] = False
-    ale.mask[:, 0] = False
+    ale = np.zeros((len(quantiles_list[0]), len(quantiles_list[1])))
 
     # Place the mean effects into the final array.
-    # Since `ale` contains `len(quantiles)` rows/columns the first of which are
-    # guaranteed to be valid (and filled with 0s), ignore the first row and column.
+    # The first row and column are effectively filled with 0s.
     ale[1:, 1:][valid_grid_indices] = mean_effects
 
     # Record where elements were missing.
-    missing_bin_mask = ale.mask.copy()[1:, 1:]
+    missing_bin_mask = np.ones(bins_list, dtype=np.bool_)
+    missing_bin_mask[valid_grid_indices] = False
 
     if np.any(missing_bin_mask):
         # Replace missing entries with their nearest neighbours.
@@ -559,36 +920,47 @@ def _second_order_ale_quant(
         )
 
         # Select only those bin centres which are valid (had observation).
-        valid_indices_list = np.where(~missing_bin_mask)
+        valid_indices = np.where(~missing_bin_mask)
         tree = cKDTree(
             np.hstack(
-                tuple(
-                    centres[valid_indices_list][:, np.newaxis]
-                    for centres in centres_list
-                )
+                tuple(centres[valid_indices][:, np.newaxis] for centres in centres_list)
             )
         )
 
-        row_indices = np.hstack(
-            [inds.reshape(-1, 1) for inds in np.where(missing_bin_mask)]
-        )
-        # Select both columns for each of the rows above.
-        column_indices = np.hstack(
-            (
-                np.zeros((row_indices.shape[0], 1), dtype=np.int8),
-                np.ones((row_indices.shape[0], 1), dtype=np.int8),
-            )
-        )
+        # There can only be as many nearest neighbours as there are valid bins.
+        n_neighbour = min((n_neighbour, (~missing_bin_mask).sum()))
 
         # Determine the indices of the points which are nearest to the empty bins.
-        nearest_points = tree.query(tree.data[row_indices, column_indices])[1]
-
-        nearest_indices = tuple(
-            valid_indices[nearest_points] for valid_indices in valid_indices_list
+        distances, nearest_points = tree.query(
+            np.hstack(
+                tuple(
+                    centres[missing_bin_mask][:, np.newaxis] for centres in centres_list
+                )
+            ),
+            k=n_neighbour,
+            n_jobs=n_jobs,
         )
 
-        # Replace the invalid bin values with the nearest valid ones.
-        ale[1:, 1:][missing_bin_mask] = ale[1:, 1:][nearest_indices]
+        # Go from the indices into `tree.data` returned by `query()` above to indices
+        # into the ALE array (and equivalently, the number of samples array).
+        nearest_indices = tuple(
+            axis_indices[nearest_points] for axis_indices in valid_indices
+        )
+
+        to_average = ale[1:, 1:][nearest_indices]
+
+        # Limit the number of averaged nearest neighbours using `neighbour_thres`.
+        # Substitute `np.nan` for bins that need to be excluded so as not to exceed
+        # `neighbour_thres`. Averaging using `np.nanmean()` then excludes these.
+        threshold_samples = math.ceil(neighbour_thres * train_set.shape[0])
+        n_avg_samples = np.cumsum(samples[nearest_indices], axis=1)
+
+        exclude_mask = n_avg_samples > threshold_samples
+
+        to_average[exclude_mask] = np.nan
+
+        # Replace the invalid bin values with averages over the nearest neighbours.
+        ale[1:, 1:][missing_bin_mask] = np.nanmean(to_average, axis=1)
 
     # Compute the cumulative sums.
     ale = np.cumsum(np.cumsum(ale, axis=0), axis=1)
@@ -606,40 +978,35 @@ def _second_order_ale_quant(
             + first_order[(..., slice(-1))[flip]]
         ) / 2
         # Weight by the number of samples in each bin.
-        first_order *= samples_grid
+        first_order *= samples
         # Take the sum along the axis.
         first_order = np.sum(first_order, axis=1 - i)
         # Normalise by the number of samples in the bins along the axis.
-        first_order /= np.sum(samples_grid, axis=1 - i)
+        first_order /= np.sum(samples, axis=1 - i)
         # The final result is the cumulative sum (with an additional 0).
         first_order = np.array([0, *np.cumsum(first_order)]).reshape((-1, 1)[flip])
 
         # Subtract the first order effect.
         ale -= first_order
 
-    # Compute the ALE at the bin centres.
-    ale = (
-        reduce(
-            add,
-            (
-                ale[i : ale.shape[0] - 1 + i, j : ale.shape[1] - 1 + j]
-                for i, j in list(product(*(range(2),) * 2))
-            ),
-        )
-        / 4
-    )
-
     # Centre the ALE by subtracting its expectation value.
-    ale -= np.sum(samples_grid * ale) / train_set.shape[0]
+    ale -= np.sum(_get_centres(ale, axis=(0, 1)) * samples) / train_set.shape[0]
 
-    # Mark the originally missing points as such to enable later interpretation.
-    ale.mask = missing_bin_mask
-    if return_samples_grid:
-        return ale, quantiles_list, samples_grid
-    return ale, quantiles_list
+    if include_mean:
+        ale += sum(np.mean(preds) for preds in predictions.values()) / 4
+
+    # Compute the ALE mask.
+    pad_missing = np.ones(np.array(missing_bin_mask.shape) + 2, dtype=np.bool_)
+    pad_missing[1:-1, 1:-1] = missing_bin_mask
+    pad_missing_counts = _get_centres(pad_missing, axis=(0, 1))
+
+    # Adjacent quantiles touching only empty cells yield average counts of 1.
+    masked_ale = np.ma.MaskedArray(ale, mask=np.isclose(pad_missing_counts, 1))
+
+    return quantiles_list, masked_ale, samples
 
 
-def _first_order_ale_cat(
+def first_order_ale_cat(
     predictor, train_set, feature, features_classes, feature_encoder=None
 ):
     """Compute the first-order ALE function on single categorical feature data.
@@ -688,6 +1055,8 @@ def ale_plot(
     train_set,
     features,
     bins=10,
+    fig=None,
+    ax=None,
     monte_carlo=False,
     predictor=None,
     features_classes=None,
@@ -695,10 +1064,13 @@ def ale_plot(
     monte_carlo_ratio=0.1,
     rugplot_lim=1000,
     verbose=False,
-    plot_quantiles=True,
+    plot_quantiles=False,
     center=False,
     quantile_axis=False,
     scilim=2,
+    include_first_order=False,
+    plot_kwargs=None,
+    grid_kwargs=None,
 ):
     """Plots ALE function of specified features based on training set.
 
@@ -715,6 +1087,13 @@ def ale_plot(
         Number of bins used to split feature's space. 2 integers can only be given
         when 2 features are supplied in order to compute a different number of
         quantiles for each feature.
+    fig : matplotlib Figure
+        Figure to plot onto. Required to plot colorbar for 2D ALE plots. The current
+        figure and axes will be used if both `fig` and `ax` are None (default). Will
+        be used to create `ax` if only `ax` is `None`.
+    ax : matplotlib Axes
+        Axes to plot onto. If None (default), the current axis will be used (a new one
+        will be created if needed).
     monte_carlo : boolean, optional
         Compute and plot Monte-Carlo samples.
     predictor : callable
@@ -733,32 +1112,48 @@ def ale_plot(
         Set to None to always plot rug plots. Set to 0 to disable rug plots.
     verbose : bool, optional
         If True, output additional information, such as Monte Carlo progress updates.
-    plot_quantiles : bool, optional
-        Add an axis to the figure that shows the feature quantiles.
+    plot_quantiles : {False, True, 'x', 'y', 'both', ('x', 'y')}, optional
+        Show the feature quantiles (via added axes). Axes can be selected using 'x',
+        'y', 'both', or ('x', 'y').
     center : bool, optional
         Only applies to first-order ALE plotting (1 feature). If True, align the
         initial points of the Monte Carlo replicas to more easily isolate their
         divergence from the overall first-order ALE. The resulting lines will no
         longer represent true ALE plots.
-    quantile_axis : bool or str, optional
-        If True, quantiles are evenly spaced. If a 2D ALE plot is requested, this
-        applies to both axis. Alternatively, axes can be selected using 'x', 'y', or
-        'both'. Disables `plot_quantiles` for the affected axes.
+    quantile_axis : {False, True, 'x', 'y', 'both', ('x', 'y')}, optional
+        If True, quantiles are evenly spaced (along both axes for a 2D ALE plot). Axes
+        can be selected using 'x', 'y', 'both', or ('x', 'y').
     scilim : float, optional
         If the decimal logarithm of the axis tick labels varies by more than `scilim`,
         tick labels will be formatted using scientific notation.
+    include_first_order : bool, optional
+        If two features are given, this decides whether to add first order ALEs and
+        mean to the plot to visualise the combined effects.
+    plot_kwargs : dict, optional
+        Parameters that are passed to `kwargs` for `first_order_*_plot` or
+        `second_order_*_plot` for one or two features, respectively. See
+        'Other Parameters' for these functions for more details. For the Monte Carlo
+        plots, parameters can be given using the 'mc_' prefix, e.g. 'mc_color' to
+        determine the color of the Monte Carlo lines.
+    grid_kwargs : bool or dict, optional
+        Parameters passed to `ax.grid()` for a 1D ALE plot. Giving False disables the
+        plotting of a grid. By default, major grid lines are shown with a linestyle of
+        '--' and alpha value of 0.4.
 
     Returns
     -------
-    fig : matplotlib.figure.Figure
+    fig : matplotlib Figure
         ALE plot figure.
-    ax : matplotlib.axes.Axes
-        ALE plot axes.
+    axes : dict of matplotlib Axes
+        Axes containing the ALE plot and other elements like a colorbar or quantile
+        axes, depending on the parameters given.
 
     Raises
     ------
     ValueError
         If both `model` and `predictor` are None.
+    ValueError
+        If `fig` is `None`, but `ax` is not None.
     ValueError
         If `len(features)` not in {1, 2}.
     ValueError
@@ -770,40 +1165,66 @@ def ale_plot(
     if model is None and predictor is None:
         raise ValueError("If 'model' is None, 'predictor' must be supplied.")
 
+    features = _parse_features(features)
+
+    if fig is None and ax is None:
+        logger.debug("Getting current figure and axis.")
+        fig, ax = plt.gcf(), plt.gca()
+    elif fig is not None and ax is None:
+        logger.debug("Creating axis from figure {}.", fig)
+        ax = fig.add_subplots(111)
+    elif fig is None and ax is not None and len(features) == 2:
+        raise ValueError("An axis ('ax') was supplied without a figure ('fig').")
+
+    axes = {"ale": ax}
+
     if features_classes is not None:
         raise NotImplementedError("'features_classes' is not implemented yet.")
 
-    features = _parse_features(features)
+    if plot_kwargs is None:
+        plot_kwargs = {}
+
     ax_labels = ["Feature '{}'".format(feature) for feature in features]
     predictor = model.predict if predictor is None else predictor
 
-    fig, ax = plt.subplots()
-
     if len(features) == 1:
+        if plot_quantiles:
+            if plot_quantiles in ("y", "both"):
+                raise ValueError(
+                    "If one feature is given, only 'x' or True are supported "
+                    f"for 'plot_quantiles'. Got: {repr(plot_quantiles)}."
+                )
         if quantile_axis:
             if quantile_axis in ("y", "both"):
                 raise ValueError(
                     "If one feature is given, only 'x' or True are supported "
-                    f"arguments for 'quantile_axis'. Got: {repr(quantile_axis)}."
+                    f"for 'quantile_axis'. Got: {repr(quantile_axis)}."
                 )
-            plot_quantiles = False
-
         if not isinstance(bins, (int, np.integer)):
             raise ValueError("1 feature was given, but 'bins' was not an integer.")
 
         if features_classes is None:
             # Continuous data.
-            ale, quantiles = _first_order_ale_quant(
+            quantiles, ale = first_order_ale_quant(
                 predictor, train_set, features[0], bins
             )
             if quantile_axis:
-                quantile_indices = np.arange(len(quantiles))
+                mod_quantiles = np.arange(len(quantiles))
+                ax.set_xticks(mod_quantiles)
+                ax.set_xticklabels(_sci_format(quantiles, scilim=scilim))
+            else:
+                mod_quantiles = quantiles
 
             if monte_carlo:
                 if isinstance(monte_carlo_ratio, (int, np.integer)):
                     rep_size = monte_carlo_ratio
                 else:
                     rep_size = int(monte_carlo_ratio * train_set.shape[0])
+
+                mc_plot_kwargs = plot_kwargs.copy()
+                mc_plot_kwargs["color"] = plot_kwargs.get("mc_color", "#1f77b4")
+                mc_plot_kwargs["alpha"] = plot_kwargs.get("mc_alpha", 0.06)
+
                 for _ in tqdm(
                     range(monte_carlo_rep),
                     desc="Calculating MC replicas",
@@ -815,7 +1236,7 @@ def ale_plot(
                     # The same quantiles cannot be reused here as this could cause
                     # some bins to be empty or contain disproportionate numbers of
                     # samples.
-                    mc_ale, mc_quantiles = _first_order_ale_quant(
+                    mc_quantiles, mc_ale = first_order_ale_quant(
                         predictor, train_set_rep, features[0], bins
                     )
                     if center:
@@ -823,98 +1244,130 @@ def ale_plot(
                         mc_ale -= mc_ale[0] - ale[0]
                     if quantile_axis:
                         # Interpolate the quantiles to the original quantiles.
-                        mc_quantiles = np.interp(
-                            mc_quantiles, quantiles, quantile_indices
-                        )
-                    _first_order_quant_plot(
-                        ax, mc_quantiles, mc_ale, color="#1f77b4", alpha=0.06
+                        mc_quantiles = np.interp(mc_quantiles, quantiles, mod_quantiles)
+                    first_order_quant_plot(
+                        mc_quantiles, mc_ale, ax=ax, **mc_plot_kwargs
                     )
 
             _ax_labels(ax, *ax_labels)
+            mc_string = monte_carlo_rep if monte_carlo else "False"
             _ax_title(
                 ax,
-                "First-order ALE of feature '{0}'".format(features[0]),
-                "Bins : {0} - Monte-Carlo : {1}".format(
-                    len(quantiles) - 1, monte_carlo_rep if monte_carlo else "False"
-                ),
+                f"First-order ALE of feature '{features[0]}'",
+                f"Bins : {len(quantiles) - 1} - Monte-Carlo : {mc_string}",
             )
 
-            ax.grid(True, linestyle="-", alpha=0.4)
-            ax.ticklabel_format(axis="x", style="sci", scilimits=(0, 0))
+            if grid_kwargs is None:
+                grid_kwargs = {}
+
+            if "linestyle" not in grid_kwargs:
+                grid_kwargs["linestyle"] = "--"
+            if "alpha" not in grid_kwargs:
+                grid_kwargs["alpha"] = 0.4
+
+            if grid_kwargs:
+                ax.grid(**grid_kwargs)
 
             if rugplot_lim is None or train_set.shape[0] <= rugplot_lim:
                 sns.rugplot(train_set[features[0]], ax=ax, alpha=0.2)
 
-            if quantile_axis:
-                _first_order_quant_plot(ax, quantile_indices, ale, color="black")
+            if "color" not in plot_kwargs:
+                plot_kwargs["color"] = "black"
 
-                ax.set_xticks(_get_centres(quantile_indices))
-                ax.set_xticklabels(_sci_format(_get_centres(quantiles), scilim=scilim))
-            else:
-                _first_order_quant_plot(ax, quantiles, ale, color="black")
+            first_order_quant_plot(mod_quantiles, ale, ax=ax, **plot_kwargs)
 
             if plot_quantiles:
-                _ax_quantiles(ax, quantiles)
+                axes["quantiles_x"] = _ax_quantiles(ax, mod_quantiles)
 
     elif len(features) == 2:
-        if quantile_axis:
-            if quantile_axis == "x":
-                plot_quantiles = "y"
-                quantile_axis_list = ("x",)
-            elif quantile_axis == "y":
-                plot_quantiles = "x"
-                quantile_axis_list = ("y",)
-            else:
-                quantile_axis_list = ("x", "y")
-                plot_quantiles = False
+        if plot_quantiles in ("x", "y"):
+            plot_quantiles = (plot_quantiles,)
+        elif plot_quantiles:
+            plot_quantiles = ("x", "y")
         else:
-            quantile_axis_list = ()
+            plot_quantiles = ()
+
+        if quantile_axis in ("x", "y"):
+            quantile_axis = (quantile_axis,)
+        elif quantile_axis:
+            quantile_axis = ("x", "y")
+        else:
+            quantile_axis = ()
 
         if features_classes is None:
             # Continuous data.
-            ale, quantiles_list = _second_order_ale_quant(
-                predictor, train_set, features, bins
+
+            # Verify the bins and make sure two ints are stored in `bins`.
+            bins = _check_two_ints(bins)
+
+            quantiles_list, ale, samples_grid = second_order_ale_quant(
+                predictor, train_set, features, bins, include_mean=include_first_order
             )
-            if quantile_axis_list:
-                plotting_quantiles_list = []
+
+            if include_first_order:
+                # Compute first order ALEs.
+                for i, (feature, nbins) in enumerate(zip(features, bins)):
+                    _, first_ord_ale = first_order_ale_quant(
+                        predictor, train_set, feature, nbins
+                    )
+                    # Add the first order ALE to the second order ALE.
+                    new_shape = [1, 1]
+                    new_shape[i] = -1
+                    ale += first_ord_ale.reshape(*new_shape)
+                title = f"Combined ALE of features '{features[0]}' and '{features[1]}'"
+
+            else:
+                # Update plotting kwargs to match the type of requested visualisation.
+                if "colorbar" not in plot_kwargs:
+                    plot_kwargs["colorbar"] = "symmetric"
+                title = (
+                    f"Second-order ALE of features '{features[0]}' and '{features[1]}'"
+                )
+
+            if quantile_axis:
+                mod_quantiles_list = []
                 for axis, quantiles in zip(("x", "y"), quantiles_list):
-                    if axis in quantile_axis_list:
+                    if axis in quantile_axis:
                         inds = np.arange(len(quantiles))
-                        plotting_quantiles_list.append(inds)
-                        ax.set(**{f"{axis}ticks": _get_centres(inds)})
+                        mod_quantiles_list.append(inds)
+                        ax.set(**{f"{axis}ticks": inds})
                         ax.set(
                             **{
                                 f"{axis}ticklabels": _sci_format(
-                                    _get_centres(quantiles), scilim=scilim
+                                    quantiles, scilim=scilim
                                 )
                             }
                         )
                     else:
-                        plotting_quantiles_list.append(quantiles)
-
-                _second_order_quant_plot(fig, ax, plotting_quantiles_list, ale)
+                        mod_quantiles_list.append(quantiles)
             else:
-                _second_order_quant_plot(fig, ax, quantiles_list, ale)
+                mod_quantiles_list = quantiles_list
 
             if plot_quantiles:
-                if plot_quantiles == "x":
-                    _ax_quantiles(ax, quantiles_list[0], twin="x")
-                elif plot_quantiles == "y":
-                    _ax_quantiles(ax, quantiles_list[1], twin="y")
-                else:
-                    for twin, quantiles in zip(("x", "y"), quantiles_list):
-                        _ax_quantiles(ax, quantiles, twin=twin)
+                for twin, quantiles in zip(("x", "y"), mod_quantiles_list):
+                    if twin in plot_quantiles:
+                        axes[f"quantiles_{twin}"] = _ax_quantiles(
+                            ax, quantiles, twin=twin
+                        )
+
+                if "x" in plot_quantiles:
+                    if "colorbar_kwargs" not in plot_kwargs:
+                        plot_kwargs["colorbar_kwargs"] = {}
+
+                    if "pad" not in plot_kwargs["colorbar_kwargs"]:
+                        plot_kwargs["colorbar_kwargs"]["pad"] = 0.1
+
+            axes.update(
+                second_order_quant_plot(
+                    mod_quantiles_list, ale, samples_grid, fig=fig, ax=ax, **plot_kwargs
+                )[1]
+            )
 
             _ax_labels(ax, *ax_labels)
-            _ax_title(
-                ax,
-                f"Second-order ALE of features '{features[0]}' and '{features[1]}'",
-                "Bins : {0}x{1}".format(*[len(quant) - 1 for quant in quantiles_list]),
-            )
+            resultant_bins = [len(quant) - 1 for quant in quantiles_list]
+            _ax_title(ax, title, "Bins : {0}x{1}".format(*resultant_bins))
     else:
         raise ValueError(
-            "'{n_feat}' 'features' were given, but only up to 2 are supported.".format(
-                n_feat=len(features)
-            )
+            f"'{len(features)}' 'features' were given, but only 1 or 2 are supported."
         )
-    return fig, ax
+    return fig, axes

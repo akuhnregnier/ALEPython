@@ -20,7 +20,7 @@ setup(
     install_requires=required,
     extras_require={"test": ["pytest>=5.4", "pytest-cov>=2.8"]},
     setup_requires=["setuptools-scm"],
-    python_requires=">=3.5",
+    python_requires=">=3.6",
     use_scm_version=dict(write_to="src/alepython/_version.py"),
     keywords="alepython",
     package_dir={"": "src"},

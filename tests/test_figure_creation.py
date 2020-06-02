@@ -30,7 +30,6 @@ def assert_n_created_figures(n=1):
 )
 def test_model(features, columns):
     """Given a model with a predict method, a plot should be created."""
-    plt.ion()  # Prevent plt.show() from blocking.
     np.random.seed(1)
     train_set = pd.DataFrame(np.random.random((100, len(columns))), columns=columns)
     with assert_n_created_figures():
@@ -45,7 +44,6 @@ def test_model(features, columns):
 )
 def test_predictor(features, columns):
     """Given a predictor function, a plot should be created."""
-    plt.ion()  # Prevent plt.show() from blocking.
     np.random.seed(1)
     train_set = pd.DataFrame(np.random.random((100, len(columns))), columns=columns)
     with assert_n_created_figures():
@@ -63,7 +61,6 @@ def test_predictor(features, columns):
     "features,columns", ((("a",), ("a", "b", "c")), (("a", "b"), ("a", "b", "c")))
 )
 def test_monte_carlo(features, columns):
-    plt.ion()  # Prevent plt.show() from blocking.
     np.random.seed(1)
     train_set = pd.DataFrame(np.random.random((100, len(columns))), columns=columns)
     with assert_n_created_figures():
@@ -85,7 +82,6 @@ def test_df_column_features():
     the right columns.
 
     """
-    plt.ion()  # Prevent plt.show() from blocking.
     n_col = 3
     np.random.seed(1)
     train_set = pd.DataFrame(
