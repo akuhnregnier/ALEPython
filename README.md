@@ -58,13 +58,13 @@ ale_plot(model, X_train, 'cont', monte_carlo=True)
 
 ## First-order ALE plots of continuous features
 
-<center><img src='https://github.com/MaximeJumelle/ALEPython/raw/dev/resources/fo_ale_quant.png'></center>
+<center><img src='https://github.com/akuhnregnier/ALEPython/raw/working/resources/fo_ale_quant.png' alt="First-order ALE plot" width="600"></center>
 
 ---
 
 ## Second-order ALE plots of continuous features
 
-<center><img src='https://github.com/MaximeJumelle/ALEPython/raw/dev/resources/so_ale_quant.png'></center>
+<center><img src='https://github.com/akuhnregnier/ALEPython/raw/working/resources/so_ale_quant.png' alt="Second-order ALE plot" width="600"></center>
 
 # Work In Progress
 
