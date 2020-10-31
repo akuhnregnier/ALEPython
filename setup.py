@@ -28,7 +28,7 @@ setup(
     include_package_data=True,
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approched :: Apache 2",
+        "License :: OSI Approved :: Apache 2",
         "Operating System :: OS Independent",
     ],
 )
