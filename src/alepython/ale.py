@@ -632,13 +632,13 @@ def second_order_quant_plot(
 
         X, Y = np.meshgrid(x, y, indexing="xy")
         get_ale_interp = scipy.interpolate.interp2d(*quantiles_list, ale.data.T)
-        if np.any(ale.mask):
-            # Bilinear interpolation is applied to the mask (as floats). The resulting
-            # values are compared to the `interp_mask_thres` threshold to calculate
-            # the interpolated mask.
-            get_mask_interp = scipy.interpolate.interp2d(
-                *quantiles_list, ale.mask.T.astype("float64")
-            )
+
+        # Bilinear interpolation is applied to the mask (as floats). The resulting
+        # values are compared to the `interp_mask_thres` threshold to calculate
+        # the interpolated mask.
+        get_mask_interp = scipy.interpolate.interp2d(
+            *quantiles_list, ale.mask.T.astype("float64")
+        )
 
         ale_interp = get_ale_interp(x, y)
         mask_interp = get_mask_interp(x, y)
