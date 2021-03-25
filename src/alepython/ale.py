@@ -1324,8 +1324,7 @@ def ale_plot(
                             mc_hull_points.append((interp_quantiles, interp_ale))
                         else:
                             mc_hull_points.append((mc_quantiles, mc_ale))
-
-                    if not monte_carlo_hull:
+                    else:
                         # Plot individual lines immediately instead of plotting the
                         # hull later.
                         first_order_quant_plot(
