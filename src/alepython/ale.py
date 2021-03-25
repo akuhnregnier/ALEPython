@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 import scipy
 import seaborn as sns
+from alphashape import alphashape
+from descartes import PolygonPatch
 from loguru import logger
 from matplotlib import colors
 from matplotlib.patches import Rectangle
@@ -1063,6 +1065,8 @@ def ale_plot(
     features_classes=None,
     monte_carlo_rep=50,
     monte_carlo_ratio=0.1,
+    monte_carlo_hull=False,
+    monte_carlo_hull_alpha=None,
     rugplot_lim=1000,
     verbose=False,
     plot_quantiles=False,
@@ -1072,6 +1076,7 @@ def ale_plot(
     include_first_order=False,
     plot_kwargs=None,
     grid_kwargs=None,
+    hull_polygon_kwargs=None,
     n_jobs=1,
     n_neighbour=10,
     neighbour_thres=0.1,
@@ -1113,6 +1118,14 @@ def ale_plot(
         If a float is given, this determines the proportion of randomly selected
         samples from `train_set` for each Monte-Carlo replica. An integer sets the
         number of samples directly.
+    monte_carlo_hull : bool
+        If True, plot the concave hull of the Monte-Carlo replicas instead of the
+        individual curves.
+    monte_carlo_hull_alpha : None or float
+        Alphashape alpha parameter used to construct the concave hull of Monte-Carlo
+        replicas. By default, this will be estimated automatically. But since this may
+        take a long time, manually specifying a value such as 0.2 may also give decent
+        results.
     rugplot_lim : int, optional
         If `train_set` has more rows than `rugplot_lim`, no rug plot will be plotted.
         Set to None to always plot rug plots. Set to 0 to disable rug plots.
@@ -1145,6 +1158,9 @@ def ale_plot(
         Parameters passed to `ax.grid()` for a 1D ALE plot. Giving False disables the
         plotting of a grid. By default, major grid lines are shown with a linestyle of
         '--' and alpha value of 0.4.
+    hull_polygon_kwargs : dict or None, optional
+        Additional arguments to pass to the matplotlib.patches.Polygon constructor
+        (e.g. 'facecolor' or 'alpha').
     n_jobs : int, optional
         Applies to 2D ALE plotting only. The number of cores to use for parallel
         processing when querying for nearest neighbour bins while substituting empty
@@ -1210,12 +1226,16 @@ def ale_plot(
     axes = {"ale": ax}
     return_vals = [fig, axes]
     mc_return_vals = []
+    mc_hull_points = []
 
     if features_classes is not None:
         raise NotImplementedError("'features_classes' is not implemented yet.")
 
     if plot_kwargs is None:
         plot_kwargs = {}
+
+    if hull_polygon_kwargs is None:
+        hull_polygon_kwargs = {}
 
     ax_labels = ["Feature '{}'".format(feature) for feature in features]
     predictor = model.predict if predictor is None else predictor
@@ -1274,19 +1294,53 @@ def ale_plot(
                     mc_quantiles, mc_ale = first_order_ale_quant(
                         predictor, train_set_rep, features[0], bins
                     )
-                    if return_mc_data:
-                        mc_return_vals.append((mc_quantiles, mc_ale))
                     if center:
                         # Align start of ALE plots to the overall ALE plot.
                         mc_ale -= mc_ale[0] - ale[0]
                     if quantile_axis:
                         # Interpolate the quantiles to the original quantiles.
                         mc_quantiles = np.interp(mc_quantiles, quantiles, mod_quantiles)
-                    first_order_quant_plot(
-                        mc_quantiles, mc_ale, ax=ax, **mc_plot_kwargs
-                    )
+                    if return_mc_data:
+                        # Need to record the individual runs.
+                        mc_return_vals.append((mc_quantiles, mc_ale))
+                    if monte_carlo_hull:
+                        # Add interpolated points to the list of hull points.
+                        # Interpolation is done to better capture the shape outlined
+                        # by the lines instead of just the points.
+                        if mc_quantiles.size < 100:
+                            interp_quantiles = np.linspace(
+                                np.min(mc_quantiles), np.max(mc_quantiles), 100
+                            )
+                            interp_ale = np.interp(
+                                interp_quantiles, mc_quantiles, mc_ale
+                            )
+                            mc_hull_points.append((interp_quantiles, interp_ale))
+                        else:
+                            mc_hull_points.append((mc_quantiles, mc_ale))
+
+                    if not monte_carlo_hull:
+                        # Plot individual lines immediately instead of plotting the
+                        # hull later.
+                        first_order_quant_plot(
+                            mc_quantiles, mc_ale, ax=ax, **mc_plot_kwargs
+                        )
                 if return_mc_data:
                     return_vals.append(tuple(mc_return_vals))
+
+                if monte_carlo_hull:
+                    if "facecolor" not in hull_polygon_kwargs:
+                        hull_polygon_kwargs["facecolor"] = "C0"
+                    if "alpha" not in hull_polygon_kwargs:
+                        hull_polygon_kwargs["alpha"] = 0.2
+
+                    # Compute the hull and plot it as a Polygon.
+                    hull_points = np.hstack(mc_hull_points).T
+                    ax.add_patch(
+                        PolygonPatch(
+                            alphashape(hull_points, alpha=monte_carlo_hull_alpha),
+                            **hull_polygon_kwargs,
+                        )
+                    )
 
             _ax_labels(ax, *ax_labels)
             mc_string = monte_carlo_rep if monte_carlo else "False"
