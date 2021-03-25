@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-
 import matplotlib.pyplot as plt
 import numpy as np
 from alphashape import alphashape
 from descartes import PolygonPatch
+from loguru import logger
 from tqdm.auto import tqdm
 
 from alepython.ale import _ax_title, _sci_format, ale_plot
@@ -84,7 +84,7 @@ def multi_ale_plot_1d(
                     features=feature,
                     return_data=True,
                     return_mc_data=True,
-                    fig=None,
+                    fig=plt.figure(),  # Create dummy figure.
                     ax=None,
                 ),
             }
@@ -138,13 +138,11 @@ def multi_ale_plot_1d(
     ax = kwargs.get("ax")
 
     if fig is None and ax is None:
-        fig, ax = plt.subplots(
-            figsize=(7, 3)
-        )  # Make sure plot is plotted onto a new figure.
-    elif fig is None:
-        fig = ax.get_figure()
-    if ax is None:
-        ax = plt.axes()
+        logger.debug("Getting current figure and axis.")
+        fig, ax = plt.gcf(), plt.gca()
+    elif fig is not None and ax is None:
+        logger.debug("Creating axis from figure {}.", fig)
+        ax = fig.add_subplot(111)
 
     for feature, quantiles, ale, marker, color, zorder, mc_hull_points in zip(
         features,
@@ -195,7 +193,7 @@ def multi_ale_plot_1d(
         )
         _ax_title(
             ax,
-            f"First-order ALE of features '{', '.join(features)}'",
+            f"First-order ALE of features '{', '.join(map(str, features))}'",
             f"Bins : {len(quantile_list[0]) - 1} - Monte-Carlo : {mc_string}",
         )
     else:
@@ -210,3 +208,5 @@ def multi_ale_plot_1d(
 
     if grid_kwargs:
         ax.grid(**grid_kwargs)
+
+    return fig, ax, final_quantiles, quantile_list, ale_list, mc_hull_points_list
