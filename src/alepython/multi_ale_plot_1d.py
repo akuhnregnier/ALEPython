@@ -60,13 +60,16 @@ def multi_ale_plot_1d(
     **kwargs : See alepython.ale_plot.
 
     """
+    if "quantile_axis" in kwargs:
+        raise NotImplementedError("'quantile_axis' is not implemented yet.")
+
     predictor = (
         kwargs["model"].predict
         if kwargs.get("predictor") is None
         else kwargs["predictor"]
     )
     if zorders is None:
-        zorders = list(range(len(features)))
+        zorders = list(range(2, 2 + len(features)))
 
     quantile_list = []
     ale_list = []
