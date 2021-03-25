@@ -1082,6 +1082,7 @@ def ale_plot(
     neighbour_thres=0.1,
     return_data=False,
     return_mc_data=False,
+    rng=None,
 ):
     """Plots ALE function of specified features based on training set.
 
@@ -1178,6 +1179,8 @@ def ale_plot(
         the output of `second_order_ale_quant()` for second-order ALE plots.
     return_mc_data : bool, optional
         Return the Monte Carlo quantile and ALE data for the first order ALE plot.
+    rng : numpy.random.Generator
+        Can be given to draw identical samples for Monte-Carlo replicas.
 
     Returns
     -------
@@ -1256,6 +1259,9 @@ def ale_plot(
         if not isinstance(bins, (int, np.integer)):
             raise ValueError("1 feature was given, but 'bins' was not an integer.")
 
+        if rng is None:
+            rng = np.random.default_rng()
+
         if features_classes is None:
             # Continuous data.
             quantiles, ale = first_order_ale_quant(
@@ -1285,8 +1291,9 @@ def ale_plot(
                     desc="Calculating MC replicas",
                     disable=not verbose,
                 ):
+                    # Bootstrap sampling (with replacement).
                     train_set_rep = train_set.iloc[
-                        np.random.randint(train_set.shape[0], size=rep_size)
+                        rng.integers(low=0, high=train_set.shape[0], size=rep_size)
                     ]
                     # The same quantiles cannot be reused here as this could cause
                     # some bins to be empty or contain disproportionate numbers of
