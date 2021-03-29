@@ -459,12 +459,12 @@ def second_order_quant_plot(
 
     Parameters
     ----------
-    quantiles_list : (2, M, N) array-like
+    quantiles_list : (2, M + 1, N + 1) array-like
         ALE quantiles for the first (`quantiles_list[0]`) and second
         (`quantiles_list[1]`) features.
-    ale : (M, N) masked array
+    ale : (M + 1, N + 1) masked array
         ALE to plot (see `second_order_ale_quant()`).
-    samples : (M - 1, N - 1) array, optional
+    samples : (M, N) array, optional
         The number of samples in each quantile bin. Used to determine empty cells.
     fig : matplotlib Figure
         Figure to plot onto. Required to plot colorbar. The current figure and axes
@@ -828,10 +828,10 @@ def second_order_ale_quant(
     quantiles : 2-tuple of array
         The quantiles used: first the quantiles for `features[0]` with shape (M + 1,),
         then for `features[1]` with shape (N + 1,).
-    ale : (M, N) masked array
+    ale : (M + 1, N + 1) masked array
         The second order ALE. Elements are masked where all adjacent quantiles touch
         cells which did not contain any data (see `samples`).
-    samples : (M - 1, N - 1) array
+    samples : (M, N) array
         The number of samples in each quantile bin.
 
     Raises
