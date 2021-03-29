@@ -10,11 +10,9 @@ import numpy as np
 import pandas as pd
 import scipy
 import seaborn as sns
-from alphashape import alphashape
-from descartes import PolygonPatch
 from loguru import logger
 from matplotlib import colors
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Polygon, Rectangle
 from scipy.spatial import cKDTree
 from tqdm.auto import tqdm
 
@@ -1053,6 +1051,62 @@ def first_order_ale_cat(
     return ale
 
 
+def _compute_mc_hull_poly_points(mc_data, interp_quantiles, verbose=False):
+    """Compute the convex hull polygon points.
+
+    Parameters
+    ----------
+    mc_data : iterable of tuple
+        The quantiles and ALE data for the Monte-Carlo repetitions.
+    interp_quantiles : array
+        The quantiles for which to compute the polygon points.
+
+    Returns
+    -------
+    points : array
+        The polygon points.
+
+    """
+    # Store the min/max points for each new quantile - this will be the new polygon.
+    interp_mins = (
+        np.zeros_like(interp_quantiles, dtype=np.float64) + np.finfo(np.float64).max
+    )
+    interp_maxs = (
+        np.zeros_like(interp_quantiles, dtype=np.float64) + np.finfo(np.float64).min
+    )
+    for mc_quantiles, mc_ale in tqdm(
+        mc_data, desc="MC hull Polygon", disable=not verbose
+    ):
+        # Do not extrapolate.
+        valid_mask = (interp_quantiles >= mc_quantiles[0]) & (
+            interp_quantiles <= mc_quantiles[-1]
+        )
+        interpolated = np.interp(interp_quantiles[valid_mask], mc_quantiles, mc_ale)
+
+        new_interp_mins = interp_mins[valid_mask]
+        min_selection = interpolated < new_interp_mins
+        new_interp_mins[min_selection] = interpolated[min_selection]
+        interp_mins[valid_mask] = new_interp_mins
+
+        new_interp_maxs = interp_maxs[valid_mask]
+        max_selection = interpolated > new_interp_maxs
+        new_interp_maxs[max_selection] = interpolated[max_selection]
+        interp_maxs[valid_mask] = new_interp_maxs
+
+    points = np.empty((interp_quantiles.size * 2, 2))
+    points[: interp_quantiles.size, 0] = interp_quantiles
+    points[: interp_quantiles.size, 1] = interp_maxs
+    points[interp_quantiles.size :, 0] = interp_quantiles[::-1]
+    points[interp_quantiles.size :, 1] = interp_mins[::-1]
+
+    # Ignore those points for which no non-interpolated samples could be found.
+    points = points[
+        ~np.any(np.isclose(np.abs(points), np.finfo(np.float64).max), axis=1)
+    ]
+
+    return points
+
+
 def ale_plot(
     model,
     train_set,
@@ -1066,7 +1120,7 @@ def ale_plot(
     monte_carlo_rep=50,
     monte_carlo_ratio=0.1,
     monte_carlo_hull=False,
-    monte_carlo_hull_alpha=None,
+    monte_carlo_hull_points=300,
     rugplot_lim=1000,
     verbose=False,
     plot_quantiles=False,
@@ -1122,11 +1176,8 @@ def ale_plot(
     monte_carlo_hull : bool
         If True, plot the concave hull of the Monte-Carlo replicas instead of the
         individual curves.
-    monte_carlo_hull_alpha : None or float
-        Alphashape alpha parameter used to construct the concave hull of Monte-Carlo
-        replicas. By default, this will be estimated automatically. But since this may
-        take a long time, manually specifying a value such as 0.2 may also give decent
-        results.
+    monte_carlo_hull_points : int
+        An even number of points to use for the construction of the hull polygon.
     rugplot_lim : int, optional
         If `train_set` has more rows than `rugplot_lim`, no rug plot will be plotted.
         Set to None to always plot rug plots. Set to 0 to disable rug plots.
@@ -1229,13 +1280,27 @@ def ale_plot(
     axes = {"ale": ax}
     return_vals = [fig, axes]
     mc_return_vals = []
-    mc_hull_points = []
 
     if features_classes is not None:
         raise NotImplementedError("'features_classes' is not implemented yet.")
 
     if plot_kwargs is None:
         plot_kwargs = {}
+
+    mc_plot_kwargs = plot_kwargs.copy()
+
+    # Override using Monte-Carlo specific options and remove these from the main
+    # plot_kwargs.
+    given_mc_options = []
+    for name in {name for name in plot_kwargs if name.startswith("mc_")}:
+        given_mc_options.append(name)
+        mc_plot_kwargs[name.lstrip("mc_")] = plot_kwargs.pop(name)
+        del mc_plot_kwargs[name]
+
+    if "mc_color" not in given_mc_options:
+        mc_plot_kwargs["color"] = "#1f77b4"
+    if "mc_alpha" not in given_mc_options:
+        mc_plot_kwargs["alpha"] = 0.06
 
     if hull_polygon_kwargs is None:
         hull_polygon_kwargs = {}
@@ -1282,10 +1347,6 @@ def ale_plot(
                 else:
                     rep_size = int(monte_carlo_ratio * train_set.shape[0])
 
-                mc_plot_kwargs = plot_kwargs.copy()
-                mc_plot_kwargs["color"] = plot_kwargs.get("mc_color", "#1f77b4")
-                mc_plot_kwargs["alpha"] = plot_kwargs.get("mc_alpha", 0.06)
-
                 for _ in tqdm(
                     range(monte_carlo_rep),
                     desc="Calculating MC replicas",
@@ -1307,23 +1368,9 @@ def ale_plot(
                     if quantile_axis:
                         # Interpolate the quantiles to the original quantiles.
                         mc_quantiles = np.interp(mc_quantiles, quantiles, mod_quantiles)
-                    if return_mc_data:
+                    if return_mc_data or monte_carlo_hull:
                         # Need to record the individual runs.
                         mc_return_vals.append((mc_quantiles, mc_ale))
-                    if monte_carlo_hull:
-                        # Add interpolated points to the list of hull points.
-                        # Interpolation is done to better capture the shape outlined
-                        # by the lines instead of just the points.
-                        if mc_quantiles.size < 100:
-                            interp_quantiles = np.linspace(
-                                np.min(mc_quantiles), np.max(mc_quantiles), 100
-                            )
-                            interp_ale = np.interp(
-                                interp_quantiles, mc_quantiles, mc_ale
-                            )
-                            mc_hull_points.append((interp_quantiles, interp_ale))
-                        else:
-                            mc_hull_points.append((mc_quantiles, mc_ale))
                     else:
                         # Plot individual lines immediately instead of plotting the
                         # hull later.
@@ -1340,10 +1387,27 @@ def ale_plot(
                         hull_polygon_kwargs["alpha"] = 0.2
 
                     # Compute the hull and plot it as a Polygon.
-                    hull_points = np.hstack(mc_hull_points).T
                     ax.add_patch(
-                        PolygonPatch(
-                            alphashape(hull_points, alpha=monte_carlo_hull_alpha),
+                        Polygon(
+                            _compute_mc_hull_poly_points(
+                                mc_return_vals,
+                                np.linspace(
+                                    np.min(
+                                        [
+                                            mc_quantiles[0]
+                                            for mc_quantiles, mc_ale in mc_return_vals
+                                        ]
+                                    ),
+                                    np.max(
+                                        [
+                                            mc_quantiles[-1]
+                                            for mc_quantiles, mc_ale in mc_return_vals
+                                        ]
+                                    ),
+                                    monte_carlo_hull_points // 2,
+                                ),
+                                verbose=verbose,
+                            ),
                             **hull_polygon_kwargs,
                         )
                     )

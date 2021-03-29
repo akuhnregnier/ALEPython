@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 import matplotlib.pyplot as plt
 import numpy as np
-from alphashape import alphashape
-from descartes import PolygonPatch
 from loguru import logger
+from matplotlib.patches import Polygon
 from tqdm.auto import tqdm
 
-from alepython.ale import _ax_title, _sci_format, ale_plot
+from alepython.ale import _ax_title, _compute_mc_hull_poly_points, _sci_format, ale_plot
 
 __all__ = ("multi_ale_plot_1d",)
 
@@ -73,7 +72,7 @@ def multi_ale_plot_1d(
 
     quantile_list = []
     ale_list = []
-    mc_hull_points_list = []
+    mc_data_list = []
     for feature in tqdm(
         features,
         desc="Calculating feature ALEs",
@@ -85,6 +84,7 @@ def multi_ale_plot_1d(
                 # Override certain kwargs essential to this function.
                 **dict(
                     features=feature,
+                    quantile_axis=False,
                     return_data=True,
                     return_mc_data=True,
                     fig=plt.figure(),  # Create dummy figure.
@@ -103,23 +103,7 @@ def multi_ale_plot_1d(
         # Record the generated data for this feature.
         quantile_list.append(quantiles)
         ale_list.append(ale)
-
-        if mc_data:
-            # Add interpolated points to the list of hull points. Interpolation is
-            # done to better capture the shape outlined by the lines instead of just
-            # the points.
-            mc_hull_points = []
-            for (mc_quantiles, mc_ale) in mc_data:
-                if mc_quantiles.size < 100:
-                    interp_quantiles = np.linspace(
-                        np.min(mc_quantiles), np.max(mc_quantiles), 100
-                    )
-                    interp_ale = np.interp(interp_quantiles, mc_quantiles, mc_ale)
-                    mc_hull_points.append((interp_quantiles, interp_ale))
-                else:
-                    mc_hull_points.append((mc_quantiles, mc_ale))
-
-            mc_hull_points_list.append(np.hstack(mc_hull_points).T)
+        mc_data_list.append(mc_data)
 
     # Construct quantiles from the individual quantiles, minimising the amount of interpolation.
     combined_quantiles = np.vstack([quantiles[None] for quantiles in quantile_list])
@@ -147,25 +131,32 @@ def multi_ale_plot_1d(
         logger.debug("Creating axis from figure {}.", fig)
         ax = fig.add_subplot(111)
 
-    for feature, quantiles, ale, marker, color, zorder, mc_hull_points in zip(
+    for feature, quantiles, ale, marker, color, zorder, mc_data in zip(
         features,
         quantile_list,
         ale_list,
         markers,
         colors,
         zorders,
-        (mc_hull_points_list if mc_hull_points_list else [None] * len(features)),
+        mc_data_list,
     ):
-        if mc_hull_points is not None:
-            # Interpolate the hull points to the accumulated final quantiles.
-            mc_hull_points[:, 0] = np.interp(
-                mc_hull_points[:, 0], final_quantiles, mod_quantiles
+        if mc_data is not None:
+            # Compute the hull and plot it as a Polygon.
+            mod_mc_data = tuple(
+                (np.interp(mc_quantiles, final_quantiles, mod_quantiles), mc_ale)
+                for mc_quantiles, mc_ale in mc_data
+            )
+            mc_hull_points = _compute_mc_hull_poly_points(
+                mod_mc_data,
+                np.linspace(
+                    np.min([mc_quantiles[0] for mc_quantiles, mc_ale in mod_mc_data]),
+                    np.max([mc_quantiles[-1] for mc_quantiles, mc_ale in mod_mc_data]),
+                    kwargs.get("monte_carlo_hull_points", 300) // 2,
+                ),
             )
             ax.add_patch(
-                PolygonPatch(
-                    alphashape(
-                        mc_hull_points, alpha=kwargs.get("monte_carlo_hull_alpha")
-                    ),
+                Polygon(
+                    mc_hull_points,
                     **{**hull_polygon_kwargs, **dict(facecolor=color, zorder=zorder)},
                 )
             )
@@ -212,4 +203,4 @@ def multi_ale_plot_1d(
     if grid_kwargs:
         ax.grid(**grid_kwargs)
 
-    return fig, ax, final_quantiles, quantile_list, ale_list, mc_hull_points_list
+    return fig, ax, final_quantiles, quantile_list, ale_list, mc_data_list
