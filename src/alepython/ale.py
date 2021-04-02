@@ -1108,6 +1108,61 @@ def _compute_mc_hull_poly_points(mc_data, interp_quantiles, verbose=False):
     return points
 
 
+def _mc_replicas(
+    model,
+    train_set,
+    train_response,
+    monte_carlo_ratio,
+    monte_carlo_rep,
+    bins,
+    quantiles,
+    mod_quantiles,
+    features,
+    rng,
+    quantile_axis=False,
+    center=False,
+    ale=None,
+    verbose=False,
+):
+    if isinstance(monte_carlo_ratio, (int, np.integer)):
+        rep_size = monte_carlo_ratio
+    else:
+        rep_size = int(monte_carlo_ratio * train_set.shape[0])
+
+    mc_replica_data = []
+
+    for _ in tqdm(
+        range(monte_carlo_rep),
+        desc="Calculating MC replicas",
+        disable=not verbose,
+    ):
+        # Bootstrap sampling (with replacement).
+        bootstrap_inds = rng.integers(low=0, high=train_set.shape[0], size=rep_size)
+        train_set_rep = train_set.iloc[bootstrap_inds]
+        train_response_rep = train_response[bootstrap_inds]
+
+        # Copy and refit the model.
+        mc_model = clone(model, safe=False)
+        mc_model.fit(train_set_rep, train_response_rep)
+
+        # The same quantiles cannot be reused here as this could cause
+        # some bins to be empty or contain disproportionate numbers of
+        # samples.
+        mc_quantiles, mc_ale = first_order_ale_quant(
+            mc_model.predict, train_set_rep, features[0], bins
+        )
+        if center:
+            # Align start of ALE plots to the overall ALE plot.
+            mc_ale -= mc_ale[0] - ale[0]
+        if quantile_axis:
+            # Interpolate the quantiles to the original quantiles.
+            mc_quantiles = np.interp(mc_quantiles, quantiles, mod_quantiles)
+
+        mc_replica_data.append((mc_quantiles, mc_ale))
+
+    return mc_replica_data
+
+
 def ale_plot(
     model,
     train_set,
@@ -1350,48 +1405,34 @@ def ale_plot(
                 mod_quantiles = quantiles
 
             if monte_carlo:
-                if isinstance(monte_carlo_ratio, (int, np.integer)):
-                    rep_size = monte_carlo_ratio
-                else:
-                    rep_size = int(monte_carlo_ratio * train_set.shape[0])
-
-                for _ in tqdm(
-                    range(monte_carlo_rep),
-                    desc="Calculating MC replicas",
-                    disable=not verbose,
-                ):
-                    # Bootstrap sampling (with replacement).
-                    bootstrap_inds = rng.integers(
-                        low=0, high=train_set.shape[0], size=rep_size
-                    )
-                    train_set_rep = train_set.iloc[bootstrap_inds]
-                    train_response_rep = train_response[bootstrap_inds]
-
-                    # Copy and refit the model.
-                    mc_model = clone(model, safe=False)
-                    mc_model.fit(train_set_rep, train_response_rep)
-
-                    # The same quantiles cannot be reused here as this could cause
-                    # some bins to be empty or contain disproportionate numbers of
-                    # samples.
-                    mc_quantiles, mc_ale = first_order_ale_quant(
-                        mc_model.predict, train_set_rep, features[0], bins
-                    )
-                    if center:
-                        # Align start of ALE plots to the overall ALE plot.
-                        mc_ale -= mc_ale[0] - ale[0]
-                    if quantile_axis:
-                        # Interpolate the quantiles to the original quantiles.
-                        mc_quantiles = np.interp(mc_quantiles, quantiles, mod_quantiles)
-                    if return_mc_data or monte_carlo_hull:
-                        # Need to record the individual runs.
-                        mc_return_vals.append((mc_quantiles, mc_ale))
-                    else:
-                        # Plot individual lines immediately instead of plotting the
-                        # hull later.
+                mc_replica_data = _mc_replicas(
+                    model=clone(model, safe=False),
+                    train_set=train_set,
+                    train_response=train_response,
+                    monte_carlo_ratio=monte_carlo_ratio,
+                    monte_carlo_rep=monte_carlo_rep,
+                    bins=bins,
+                    quantiles=quantiles,
+                    mod_quantiles=mod_quantiles,
+                    features=features,
+                    rng=rng,
+                    quantile_axis=quantile_axis,
+                    center=center,
+                    ale=ale,
+                    verbose=verbose,
+                )
+                if not monte_carlo_hull:
+                    # Plot individual lines immediately instead of plotting the hull
+                    # later.
+                    for mc_quantiles, mc_ale in mc_replica_data:
                         first_order_quant_plot(
                             mc_quantiles, mc_ale, ax=ax, **mc_plot_kwargs
                         )
+
+                if return_mc_data or monte_carlo_hull:
+                    # Need to record the individual runs.
+                    mc_return_vals.extend(mc_replica_data)
+
                 if return_mc_data:
                     return_vals.append(tuple(mc_return_vals))
 
@@ -1410,13 +1451,13 @@ def ale_plot(
                                     np.min(
                                         [
                                             mc_quantiles[0]
-                                            for mc_quantiles, mc_ale in mc_return_vals
+                                            for mc_quantiles, mc_ale in mc_replica_data
                                         ]
                                     ),
                                     np.max(
                                         [
                                             mc_quantiles[-1]
-                                            for mc_quantiles, mc_ale in mc_return_vals
+                                            for mc_quantiles, mc_ale in mc_replica_data
                                         ]
                                     ),
                                     monte_carlo_hull_points // 2,
