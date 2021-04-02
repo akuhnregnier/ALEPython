@@ -9,7 +9,7 @@ import pytest
 
 from alepython import ale_plot
 
-from .utils import SimpleModel, simple_predictor
+from .utils import DummyModel
 
 
 @contextmanager
@@ -33,26 +33,7 @@ def test_model(features, columns):
     np.random.seed(1)
     train_set = pd.DataFrame(np.random.random((100, len(columns))), columns=columns)
     with assert_n_created_figures():
-        ale_plot(SimpleModel(), train_set, features)
-    # Clean up the created figure.
-    plt.close()
-
-
-@pytest.mark.parametrize(
-    "features,columns",
-    (("a", ("a", "b")), (("a",), ("a", "b", "c")), (("a", "b"), ("a", "b", "c"))),
-)
-def test_predictor(features, columns):
-    """Given a predictor function, a plot should be created."""
-    np.random.seed(1)
-    train_set = pd.DataFrame(np.random.random((100, len(columns))), columns=columns)
-    with assert_n_created_figures():
-        ale_plot(
-            model=None,
-            train_set=train_set,
-            features=features,
-            predictor=simple_predictor,
-        )
+        ale_plot(DummyModel(), train_set, features)
     # Clean up the created figure.
     plt.close()
 
@@ -63,12 +44,13 @@ def test_predictor(features, columns):
 def test_monte_carlo(features, columns):
     np.random.seed(1)
     train_set = pd.DataFrame(np.random.random((100, len(columns))), columns=columns)
+    train_response = np.random.random((100,))
     with assert_n_created_figures():
         ale_plot(
-            model=None,
+            model=DummyModel(),
             train_set=train_set,
             features=features,
-            predictor=simple_predictor,
+            train_response=train_response,
             monte_carlo=True,
         )
     # Clean up the created figure.
@@ -88,6 +70,6 @@ def test_df_column_features():
         np.random.random((100, n_col)), columns=list(ascii_lowercase[:n_col])
     )
     with assert_n_created_figures():
-        ale_plot(SimpleModel(), train_set, train_set.columns[:1])
+        ale_plot(DummyModel(), train_set, train_set.columns[:1])
     # Clean up the created figure.
     plt.close()

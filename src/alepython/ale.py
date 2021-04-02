@@ -14,6 +14,7 @@ from loguru import logger
 from matplotlib import colors
 from matplotlib.patches import Polygon, Rectangle
 from scipy.spatial import cKDTree
+from sklearn.base import clone
 from tqdm.auto import tqdm
 
 logger.disable("alepython")
@@ -1067,37 +1068,37 @@ def _compute_mc_hull_poly_points(mc_data, interp_quantiles, verbose=False):
         The polygon points.
 
     """
-    # Store the min/max points for each new quantile - this will be the new polygon.
+    # Store the points for each new quantile.
+    interpolated_data = np.ma.MaskedArray(
+        np.zeros((len(mc_data), interp_quantiles.size)),
+        mask=True,  # Only treat those points as valid which are assigned later on.
+    )
     interp_mins = (
         np.zeros_like(interp_quantiles, dtype=np.float64) + np.finfo(np.float64).max
     )
     interp_maxs = (
         np.zeros_like(interp_quantiles, dtype=np.float64) + np.finfo(np.float64).min
     )
-    for mc_quantiles, mc_ale in tqdm(
-        mc_data, desc="MC hull Polygon", disable=not verbose
+    for (mc_index, (mc_quantiles, mc_ale)) in enumerate(
+        tqdm(mc_data, desc="MC hull Polygon", disable=not verbose)
     ):
         # Do not extrapolate.
         valid_mask = (interp_quantiles >= mc_quantiles[0]) & (
             interp_quantiles <= mc_quantiles[-1]
         )
         interpolated = np.interp(interp_quantiles[valid_mask], mc_quantiles, mc_ale)
+        # Save the interpolated data at the new quantiles.
+        interpolated_data[mc_index][valid_mask] = interpolated
 
-        new_interp_mins = interp_mins[valid_mask]
-        min_selection = interpolated < new_interp_mins
-        new_interp_mins[min_selection] = interpolated[min_selection]
-        interp_mins[valid_mask] = new_interp_mins
-
-        new_interp_maxs = interp_maxs[valid_mask]
-        max_selection = interpolated > new_interp_maxs
-        new_interp_maxs[max_selection] = interpolated[max_selection]
-        interp_maxs[valid_mask] = new_interp_maxs
+    # The Polygon will consist of the mean +- the std.
+    interp_means = np.mean(interpolated_data, axis=0)
+    interp_std = np.std(interpolated_data, axis=0)
 
     points = np.empty((interp_quantiles.size * 2, 2))
     points[: interp_quantiles.size, 0] = interp_quantiles
-    points[: interp_quantiles.size, 1] = interp_maxs
+    points[: interp_quantiles.size, 1] = interp_means + interp_std
     points[interp_quantiles.size :, 0] = interp_quantiles[::-1]
-    points[interp_quantiles.size :, 1] = interp_mins[::-1]
+    points[interp_quantiles.size :, 1] = (interp_means - interp_std)[::-1]
 
     # Ignore those points for which no non-interpolated samples could be found.
     points = points[
@@ -1112,10 +1113,10 @@ def ale_plot(
     train_set,
     features,
     bins=10,
+    train_response=None,
     fig=None,
     ax=None,
     monte_carlo=False,
-    predictor=None,
     features_classes=None,
     monte_carlo_rep=50,
     monte_carlo_ratio=0.1,
@@ -1143,16 +1144,20 @@ def ale_plot(
     Parameters
     ----------
     model : object
-        An object that implements a 'predict' method. If None, a `predictor` function
-        must be supplied which will be used instead of `model.predict`.
+        An object that implements a 'predict' method. Additionally, it should also
+        implement a 'fit' method if Monte-Carlo replicas will be computed (in which
+        case the model will be copied using 'sklearn.base.clone' prior to being fitted with
+        the bootstrap samples.
     train_set : pandas.core.frame.DataFrame
-        Training set on which model was trained.
+        Training set predictors on which model was trained.
     features : [2-iterable of] column label
         One or two features for which to plot the ALE plot.
     bins : [2-iterable of] int, optional
         Number of bins used to split feature's space. 2 integers can only be given
         when 2 features are supplied in order to compute a different number of
         quantiles for each feature.
+    train_response : array-like or None
+        Training set response. Only needs to be given if `monte_carlo` is True.
     fig : matplotlib Figure
         Figure to plot onto. Required to plot colorbar for 2D ALE plots. The current
         figure and axes will be used if both `fig` and `ax` are None (default). Will
@@ -1162,8 +1167,6 @@ def ale_plot(
         will be created if needed).
     monte_carlo : boolean, optional
         Compute and plot Monte-Carlo samples.
-    predictor : callable
-        Custom prediction function. See `model`.
     features_classes : iterable of str, optional
         If features is first-order and a categorical variable, plot ALE according to
         discrete aspect of data.
@@ -1252,21 +1255,26 @@ def ale_plot(
     Raises
     ------
     ValueError
-        If both `model` and `predictor` are None.
-    ValueError
         If `fig` is `None`, but `ax` is not None.
     ValueError
         If `len(features)` not in {1, 2}.
     ValueError
         If multiple bins were given for 1 feature.
+    ValueError
+        If `monte_carlo` is True, but `train_response` is None.
     NotImplementedError
         If `features_classes` is not None.
 
     """
-    if model is None and predictor is None:
-        raise ValueError("If 'model' is None, 'predictor' must be supplied.")
-
     features = _parse_features(features)
+
+    if monte_carlo:
+        if train_response is None:
+            raise ValueError(
+                "If `monte_carlo` is True, `train_response` needs to be given."
+            )
+        else:
+            train_response = np.asarray(train_response)
 
     if fig is None and ax is None:
         logger.debug("Getting current figure and axis.")
@@ -1306,7 +1314,7 @@ def ale_plot(
         hull_polygon_kwargs = {}
 
     ax_labels = ["Feature '{}'".format(feature) for feature in features]
-    predictor = model.predict if predictor is None else predictor
+    predictor = model.predict
 
     if len(features) == 1:
         if plot_quantiles:
@@ -1353,14 +1361,21 @@ def ale_plot(
                     disable=not verbose,
                 ):
                     # Bootstrap sampling (with replacement).
-                    train_set_rep = train_set.iloc[
-                        rng.integers(low=0, high=train_set.shape[0], size=rep_size)
-                    ]
+                    bootstrap_inds = rng.integers(
+                        low=0, high=train_set.shape[0], size=rep_size
+                    )
+                    train_set_rep = train_set.iloc[bootstrap_inds]
+                    train_response_rep = train_response[bootstrap_inds]
+
+                    # Copy and refit the model.
+                    mc_model = clone(model, safe=False)
+                    mc_model.fit(train_set_rep, train_response_rep)
+
                     # The same quantiles cannot be reused here as this could cause
                     # some bins to be empty or contain disproportionate numbers of
                     # samples.
                     mc_quantiles, mc_ale = first_order_ale_quant(
-                        predictor, train_set_rep, features[0], bins
+                        mc_model.predict, train_set_rep, features[0], bins
                     )
                     if center:
                         # Align start of ALE plots to the overall ALE plot.

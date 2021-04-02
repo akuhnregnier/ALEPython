@@ -11,7 +11,7 @@ from alepython.ale import (
     second_order_ale_quant,
 )
 
-from .utils import SimpleModel
+from .utils import DummyModel
 
 
 def test_two_ints():
@@ -33,22 +33,19 @@ def test_second_order_ale_quant():
 
 def test_ale_plot():
     """Test that proper errors are raised."""
-    with pytest.raises(ValueError, match=r".*'model'.*'predictor'.*"):
-        ale_plot(model=None, train_set=pd.DataFrame([1]), features=[0])
-
     with pytest.raises(ValueError, match=r"'3' 'features'.*"):
         ale_plot(
-            model=SimpleModel(), train_set=pd.DataFrame([1]), features=list(range(3))
+            model=DummyModel(), train_set=pd.DataFrame([1]), features=list(range(3))
         )
 
     with pytest.raises(ValueError, match=r"'0' 'features'.*"):
-        ale_plot(model=SimpleModel(), train_set=pd.DataFrame([1]), features=[])
+        ale_plot(model=DummyModel(), train_set=pd.DataFrame([1]), features=[])
 
     with pytest.raises(
         NotImplementedError, match="'features_classes' is not implemented yet."
     ):
         ale_plot(
-            model=SimpleModel(),
+            model=DummyModel(),
             train_set=pd.DataFrame([1]),
             features=[0],
             features_classes=["a"],
@@ -56,7 +53,10 @@ def test_ale_plot():
 
     with pytest.raises(ValueError, match=r"1 feature.*but 'bins' was not an integer."):
         ale_plot(
-            model=SimpleModel(), train_set=pd.DataFrame([1]), features=[0], bins=1.0,
+            model=DummyModel(),
+            train_set=pd.DataFrame([1]),
+            features=[0],
+            bins=1.0,
         )
 
 
