@@ -21,6 +21,8 @@ def multi_ale_plot_1d(
     zorders=None,
     xlabel_skip=2,
     format_xlabels=True,
+    show_full=True,
+    margin=0.03,
     **kwargs,
 ):
     """Plots ALE function of multiple specified features based on training set.
@@ -53,6 +55,12 @@ def multi_ale_plot_1d(
         Only plot an xlabel marker every `xlabel_skip` label.
     format_xlabels : bool
         If True, apply xlabel formatting according to the above options.
+    show_full : bool
+        If True, display the ALE plot generated using all the data, as opposed to
+        simply the bootstrap uncertainties.
+    margin : float
+        Fraction by which to multiply the plotted coordinate range to yield the
+        corresponding margin. This is applied separately for x and y.
 
     Other Parameters
     ----------------
@@ -117,6 +125,8 @@ def multi_ale_plot_1d(
 
     if kwargs.get("hull_polygon_kwargs") is None:
         hull_polygon_kwargs = {}
+    else:
+        hull_polygon_kwargs = kwargs["hull_polygon_kwargs"]
 
     if "alpha" not in hull_polygon_kwargs:
         hull_polygon_kwargs["alpha"] = 0.2
@@ -130,6 +140,17 @@ def multi_ale_plot_1d(
     elif fig is not None and ax is None:
         logger.debug("Creating axis from figure {}.", fig)
         ax = fig.add_subplot(111)
+
+    x_lims = [np.inf, -np.inf]
+    y_lims = [np.inf, -np.inf]
+
+    def update_lims(v, lims):
+        v_min = np.min(v)
+        v_max = np.max(v)
+        if v_min < lims[0]:
+            lims[0] = v_min
+        if v_max > lims[1]:
+            lims[1] = v_max
 
     for feature, quantiles, ale, marker, color, zorder, mc_data in zip(
         features,
@@ -157,19 +178,42 @@ def multi_ale_plot_1d(
             ax.add_patch(
                 Polygon(
                     mc_hull_points,
-                    **{**hull_polygon_kwargs, **dict(facecolor=color, zorder=zorder)},
+                    **{
+                        **hull_polygon_kwargs,
+                        **dict(
+                            facecolor=color,
+                            zorder=zorder,
+                            label=feature if not show_full else None,
+                        ),
+                    },
                 )
             )
 
-        # Interpolate each of the quantiles relative to the accumulated final quantiles.
-        ax.plot(
-            np.interp(quantiles, final_quantiles, mod_quantiles),
-            ale,
-            marker=marker,
-            label=feature,
-            c=color,
-            zorder=zorder,
-        )
+            # Update plot limits.
+            update_lims(mc_hull_points[:, 0], x_lims)
+            update_lims(mc_hull_points[:, 1], y_lims)
+
+        if show_full:
+            # Interpolate each of the quantiles relative to the accumulated final quantiles.
+            interp_quantiles = np.interp(quantiles, final_quantiles, mod_quantiles)
+            ax.plot(
+                interp_quantiles,
+                ale,
+                marker=marker,
+                label=feature,
+                c=color,
+                zorder=zorder,
+            )
+
+            # Update plot limits.
+            update_lims(interp_quantiles, x_lims)
+            update_lims(ale, y_lims)
+
+    # Set plot limits.
+    x_margin = margin * (x_lims[1] - x_lims[0])
+    ax.set_xlim(x_lims[0] - x_margin, x_lims[1] + x_margin)
+    y_margin = margin * (y_lims[1] - y_lims[0])
+    ax.set_ylim(y_lims[0] - y_margin, y_lims[1] + y_margin)
 
     ax.legend(loc="best", ncol=2)
 
