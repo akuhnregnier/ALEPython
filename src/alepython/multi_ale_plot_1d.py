@@ -23,6 +23,7 @@ def multi_ale_plot_1d(
     format_xlabels=True,
     show_full=True,
     margin=0.03,
+    rngs=None,
     **kwargs,
 ):
     """Plots ALE function of multiple specified features based on training set.
@@ -61,6 +62,8 @@ def multi_ale_plot_1d(
     margin : float
         Fraction by which to multiply the plotted coordinate range to yield the
         corresponding margin. This is applied separately for x and y.
+    rngs : iterable of numpy Generator or None
+        If given, the number of items given should match the number of features given.
 
     Other Parameters
     ----------------
@@ -70,21 +73,26 @@ def multi_ale_plot_1d(
     if "quantile_axis" in kwargs:
         raise NotImplementedError("'quantile_axis' is not implemented yet.")
 
-    predictor = (
-        kwargs["model"].predict
-        if kwargs.get("predictor") is None
-        else kwargs["predictor"]
-    )
     if zorders is None:
         zorders = list(range(2, 2 + len(features)))
+
+    if rngs is not None:
+        if len(rngs) != len(features):
+            raise ValueError("Number of `rngs` should match number of `features`.")
+    else:
+        rng = kwargs.get("rng")
+        rngs = [rng] * len(features)
 
     quantile_list = []
     ale_list = []
     mc_data_list = []
-    for feature in tqdm(
-        features,
-        desc="Calculating feature ALEs",
-        disable=not kwargs.get("verbose", False),
+    for feature, rng in zip(
+        tqdm(
+            features,
+            desc="Calculating feature ALEs",
+            disable=not kwargs.get("verbose", False),
+        ),
+        rngs,
     ):
         out = ale_plot(
             **{
@@ -92,6 +100,7 @@ def multi_ale_plot_1d(
                 # Override certain kwargs essential to this function.
                 **dict(
                     features=feature,
+                    rng=rng,
                     quantile_axis=False,
                     return_data=True,
                     return_mc_data=True,
