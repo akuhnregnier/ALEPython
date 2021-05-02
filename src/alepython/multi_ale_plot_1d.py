@@ -5,7 +5,7 @@ from loguru import logger
 from matplotlib.patches import Polygon
 from tqdm.auto import tqdm
 
-from alepython.ale import _ax_title, _compute_mc_hull_poly_points, _sci_format, ale_plot
+from .ale import _ax_title, _compute_mc_hull_poly_points, _sci_format, ale_plot
 
 __all__ = ("multi_ale_plot_1d",)
 
