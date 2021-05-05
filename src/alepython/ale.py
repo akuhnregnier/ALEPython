@@ -1073,12 +1073,7 @@ def _compute_mc_hull_poly_points(mc_data, interp_quantiles, verbose=False):
         np.zeros((len(mc_data), interp_quantiles.size)),
         mask=True,  # Only treat those points as valid which are assigned later on.
     )
-    interp_mins = (
-        np.zeros_like(interp_quantiles, dtype=np.float64) + np.finfo(np.float64).max
-    )
-    interp_maxs = (
-        np.zeros_like(interp_quantiles, dtype=np.float64) + np.finfo(np.float64).min
-    )
+
     for (mc_index, (mc_quantiles, mc_ale)) in enumerate(
         tqdm(mc_data, desc="MC hull Polygon", disable=not verbose)
     ):
